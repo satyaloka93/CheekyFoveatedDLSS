@@ -1466,6 +1466,21 @@ NgxResult evaluate_d3d12_backend(
     parameters->Set("DLSS.Output.Subrect.Base.Y", inputs.output_base_y);
     parameters->Set("DLSS.Enable.Output.Subrects", 0);
 
+    // CREATION PARAMETERS, which the canonical path never set.
+    //
+    // In a native D3D12 title this block is the GAME's parameter object and already carries the
+    // node masks, the quality value and the create flags, so CreateFeature succeeds on what the
+    // game put there. On the D3D11 transport path the add-on allocates a PRIVATE parameter block
+    // (AllocateParameters), which starts empty -- and CreateFeature then returns
+    // 0xBAD0000B FAIL_MissingInput on every attempt. Measured in System Shock Remake: 1539 creates,
+    // 1539 failures, zero evaluations, and a frame-rate cost from retrying every frame.
+    // d3d11_d3d12_transport.cpp sets exactly these four on its own destination block; the canonical
+    // path needs the same.
+    parameters->Set("CreationNodeMask", 1U);
+    parameters->Set("VisibilityNodeMask", 1U);
+    parameters->Set("PerfQualityValue", contract.perf_quality);
+    parameters->Set("DLSS.Feature.Create.Flags", contract.create_flags);
+
     NgxResult result = 0xBAD00005U;
     {
         std::lock_guard lock(canonical_views_mutex);
