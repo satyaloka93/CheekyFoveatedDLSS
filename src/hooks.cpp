@@ -243,13 +243,23 @@ std::atomic<CreateD3D11Fn> real_create_d3d11{};
 std::atomic<CreateD3D11Fn> real_core_create_d3d11{};
 std::atomic<EvaluateD3D11Fn> real_evaluate_d3d11{};
 std::atomic<EvaluateD3D11CFn> real_evaluate_d3d11_c{};
+// EvaluateFeature on the DISPATCHER as well as the runtime. _nvngx.dll exports
+// NVSDK_NGX_D3D1x_EvaluateFeature, but only Init/CreateFeature/ReleaseFeature were ever hooked on
+// it -- so in a title where nvngx_dlss.dll is probed and unloaded again before gameplay (The Outer
+// Worlds 2: LOAD->UNLOAD twice, ~268 ms each) the evaluate path was never intercepted and no crop
+// was ever prepared, while a title that keeps the runtime resident (GTA SA: TDE) worked.
+std::atomic<EvaluateD3D11Fn> real_core_evaluate_d3d11{};
+std::atomic<EvaluateD3D11CFn> real_core_evaluate_d3d11_c{};
 std::atomic<ReleaseD3D11Fn> real_release_d3d11{};
 std::atomic<ReleaseD3D11Fn> real_core_release_d3d11{};
 std::atomic<CreateD3D12Fn> real_create_d3d12{};
 std::atomic<CreateD3D12Fn> real_core_create_d3d12{};
 std::atomic<EvaluateD3D12Fn> real_evaluate_d3d12{};
 std::atomic<EvaluateD3D12CFn> real_evaluate_d3d12_c{};
+std::atomic<EvaluateD3D12Fn> real_core_evaluate_d3d12{};
+std::atomic<EvaluateD3D12CFn> real_core_evaluate_d3d12_c{};
 std::atomic<ReleaseD3D12Fn> real_release_d3d12{};
+std::atomic<ReleaseD3D12Fn> real_core_release_d3d12{};
 std::atomic<SlEvaluateFeatureFn> real_sl_evaluate_feature{};
 std::atomic<SlSetTagFn> real_sl_set_tag{};
 std::atomic<SlSetTagForFrameFn> real_sl_set_tag_for_frame{};
@@ -285,6 +295,11 @@ std::atomic<std::uint32_t> applied_sl_output_height{};
 std::atomic<bool> streamline_foveation_active{};
 std::atomic<std::uint32_t> captured_d3d12_create_flags{};
 std::atomic<bool> captured_d3d12_create_flags_valid{};
+// BOTH the dispatcher and the runtime can be hooked at once (GTA SA admits nvngx_dlss.dll AND
+// _nvngx.dll). If _nvngx forwards to the runtime's own EvaluateFeature, one game evaluation would
+// pass through the body below twice and the crop would be applied on top of itself. Same shape as
+// inside_streamline_evaluation immediately below.
+thread_local bool inside_direct_evaluation = false;
 thread_local bool inside_streamline_evaluation{};
 
 struct StreamlineEvaluationScope {
@@ -3240,13 +3255,13 @@ NgxResult hook_core_create_d3d11(
     return result;
 }
 
-NgxResult hook_evaluate_d3d11(
+NgxResult hook_evaluate_d3d11_common(
+    const EvaluateD3D11Fn original,
     ID3D11DeviceContext* const context,
     const NgxHandle* const handle,
     const NgxParameters* const parameters,
     const NgxProgressCallback callback
 ) {
-    const auto original = real_evaluate_d3d11.load(std::memory_order_acquire);
     if (original == nullptr) return 0xBAD00007U;
     note_evaluation_begin(DiagnosticApi::d3d11, parameters);
     if (!is_d3d11_private_handle(handle)) {
@@ -3377,13 +3392,50 @@ NgxResult hook_evaluate_d3d11(
     return result;
 }
 
-NgxResult hook_evaluate_d3d11_c(
+// The runtime's own export. Guarded so a dispatcher->runtime forward cannot apply the crop twice.
+NgxResult hook_evaluate_d3d11(
+    ID3D11DeviceContext* const context,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallback callback
+) {
+    const auto original = real_evaluate_d3d11.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(context, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d11_common(original, context, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
+// The DISPATCHER's export (_nvngx.dll). This is the one that was missing, and the reason foveation
+// never engaged in titles that do not keep nvngx_dlss.dll resident.
+NgxResult hook_core_evaluate_d3d11(
+    ID3D11DeviceContext* const context,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallback callback
+) {
+    const auto original = real_core_evaluate_d3d11.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(context, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d11_common(original, context, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
+NgxResult hook_evaluate_d3d11_c_common(
+    const EvaluateD3D11CFn original,
     ID3D11DeviceContext* const context,
     const NgxHandle* const handle,
     const NgxParameters* const parameters,
     const NgxProgressCallbackC callback
 ) {
-    const auto original = real_evaluate_d3d11_c.load(std::memory_order_acquire);
     if (original == nullptr) return 0xBAD00007U;
     note_evaluation_begin(DiagnosticApi::d3d11, parameters);
     if (!is_d3d11_private_handle(handle)) {
@@ -3507,6 +3559,43 @@ NgxResult hook_evaluate_d3d11_c(
     }
 
     diagnostic_note_result(DiagnosticApi::d3d11, result);
+    return result;
+}
+
+// The runtime's own export. Guarded so a dispatcher->runtime forward cannot apply the crop twice.
+NgxResult hook_evaluate_d3d11_c(
+    ID3D11DeviceContext* const context,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallbackC callback
+) {
+    const auto original = real_evaluate_d3d11_c.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(context, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d11_c_common(original, context, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
+// The DISPATCHER's export (_nvngx.dll). This is the one that was missing, and the reason foveation
+// never engaged in titles that do not keep nvngx_dlss.dll resident.
+NgxResult hook_core_evaluate_d3d11_c(
+    ID3D11DeviceContext* const context,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallbackC callback
+) {
+    const auto original = real_core_evaluate_d3d11_c.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(context, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d11_c_common(original, context, handle, parameters, callback);
+    inside_direct_evaluation = false;
     return result;
 }
 
@@ -3757,9 +3846,22 @@ void evaluate_nr_after_native_d3d12(
     }
 
     D3D12BackendCallbacks callbacks{};
+    // FALL BACK TO THE DISPATCHER'S ENTRY POINTS. The private evaluation builds its own DLSS
+    // feature, so it needs CreateFeature and ReleaseFeature as well as Evaluate. Taking all three
+    // from nvngx_dlss.dll only works while that module is resident; a title that probes and unloads
+    // it (The Outer Worlds 2) leaves create/release null, and evaluate_d3d12_backend then rejects
+    // EVERY evaluation -- "D3D12 canonical rejected ... create=0000000000000000" -- so the crop is
+    // computed, discarded, and the game upscales the full frame as if the add-on were not there.
+    // _nvngx.dll exports the same three, and is resident for the whole session.
     callbacks.create_feature = real_create_d3d12.load(std::memory_order_acquire);
+    if (callbacks.create_feature == nullptr) {
+        callbacks.create_feature = real_core_create_d3d12.load(std::memory_order_acquire);
+    }
     callbacks.evaluate_feature = evaluate;
     callbacks.release_feature = real_release_d3d12.load(std::memory_order_acquire);
+    if (callbacks.release_feature == nullptr) {
+        callbacks.release_feature = real_core_release_d3d12.load(std::memory_order_acquire);
+    }
 
     PeripheralDlaaResources peripheral{};
     bool peripheral_ready{};
@@ -3875,13 +3977,13 @@ void evaluate_nr_after_native_d3d12(
     return true;
 }
 
-NgxResult hook_evaluate_d3d12(
+NgxResult hook_evaluate_d3d12_common(
+    const EvaluateD3D12Fn original,
     ID3D12GraphicsCommandList* const command_list,
     const NgxHandle* const handle,
     const NgxParameters* const parameters,
     const NgxProgressCallback callback
 ) {
-    const auto original = real_evaluate_d3d12.load(std::memory_order_acquire);
     if (original == nullptr) return 0xBAD00007U;
     note_evaluation_begin(DiagnosticApi::d3d12, parameters);
     if (inside_streamline_evaluation) {
@@ -3928,13 +4030,50 @@ NgxResult hook_evaluate_d3d12(
     return result;
 }
 
-NgxResult hook_evaluate_d3d12_c(
+// The runtime's own export. Guarded so a dispatcher->runtime forward cannot apply the crop twice.
+NgxResult hook_evaluate_d3d12(
+    ID3D12GraphicsCommandList* const command_list,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallback callback
+) {
+    const auto original = real_evaluate_d3d12.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(command_list, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d12_common(original, command_list, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
+// The DISPATCHER's export (_nvngx.dll). This is the one that was missing, and the reason foveation
+// never engaged in titles that do not keep nvngx_dlss.dll resident.
+NgxResult hook_core_evaluate_d3d12(
+    ID3D12GraphicsCommandList* const command_list,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallback callback
+) {
+    const auto original = real_core_evaluate_d3d12.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(command_list, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d12_common(original, command_list, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
+NgxResult hook_evaluate_d3d12_c_common(
+    const EvaluateD3D12CFn original,
     ID3D12GraphicsCommandList* const command_list,
     const NgxHandle* const handle,
     const NgxParameters* const parameters,
     const NgxProgressCallbackC callback
 ) {
-    const auto original = real_evaluate_d3d12_c.load(std::memory_order_acquire);
     if (original == nullptr) return 0xBAD00007U;
     note_evaluation_begin(DiagnosticApi::d3d12, parameters);
     if (inside_streamline_evaluation) {
@@ -3984,8 +4123,53 @@ NgxResult hook_evaluate_d3d12_c(
     return result;
 }
 
+// The runtime's own export. Guarded so a dispatcher->runtime forward cannot apply the crop twice.
+NgxResult hook_evaluate_d3d12_c(
+    ID3D12GraphicsCommandList* const command_list,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallbackC callback
+) {
+    const auto original = real_evaluate_d3d12_c.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(command_list, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d12_c_common(original, command_list, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
+// The DISPATCHER's export (_nvngx.dll). This is the one that was missing, and the reason foveation
+// never engaged in titles that do not keep nvngx_dlss.dll resident.
+NgxResult hook_core_evaluate_d3d12_c(
+    ID3D12GraphicsCommandList* const command_list,
+    const NgxHandle* const handle,
+    const NgxParameters* const parameters,
+    const NgxProgressCallbackC callback
+) {
+    const auto original = real_core_evaluate_d3d12_c.load(std::memory_order_acquire);
+    if (inside_direct_evaluation) {
+        return original == nullptr ? 0xBAD00007U
+                                   : original(command_list, handle, parameters, callback);
+    }
+    inside_direct_evaluation = true;
+    const auto result = hook_evaluate_d3d12_c_common(original, command_list, handle, parameters, callback);
+    inside_direct_evaluation = false;
+    return result;
+}
+
 NgxResult hook_release_d3d12(NgxHandle* const handle) {
     const auto original = real_release_d3d12.load(std::memory_order_acquire);
+    forget_d3d12_game_view(handle);
+    return original == nullptr ? 0xBAD00007U : original(handle);
+}
+
+// The dispatcher's ReleaseFeature, so a view retired through _nvngx.dll is forgotten too. Without
+// it the per-view state outlives the feature whenever the runtime is not the module being hooked.
+NgxResult hook_core_release_d3d12(NgxHandle* const handle) {
+    const auto original = real_core_release_d3d12.load(std::memory_order_acquire);
     forget_d3d12_game_view(handle);
     return original == nullptr ? 0xBAD00007U : original(handle);
 }
@@ -4483,6 +4667,47 @@ template <typename T>
             "NVSDK_NGX_D3D12_CreateFeature",
             reinterpret_cast<void*>(&hook_core_create_d3d12),
             real_core_create_d3d12,
+            DiagnosticApi::d3d12
+        );
+        // EVALUATE ON THE DISPATCHER. _nvngx.dll exports NVSDK_NGX_D3D1x_EvaluateFeature, and until
+        // now only Init/CreateFeature/ReleaseFeature were taken from it. A title that keeps
+        // nvngx_dlss.dll resident (GTA SA: TDE) hooked evaluate on the runtime and worked; one that
+        // probes and unloads it (The Outer Worlds 2, ~268 ms per load) was left with a dispatcher
+        // whose evaluate nobody watched, so no crop was ever prepared. install_direct_hook no-ops
+        // when an export does not resolve, so this is safe on drivers that lack them.
+        installed |= install_direct_hook(
+            core_runtime,
+            "NVSDK_NGX_D3D11_EvaluateFeature",
+            reinterpret_cast<void*>(&hook_core_evaluate_d3d11),
+            real_core_evaluate_d3d11,
+            DiagnosticApi::d3d11
+        );
+        installed |= install_direct_hook(
+            core_runtime,
+            "NVSDK_NGX_D3D11_EvaluateFeature_C",
+            reinterpret_cast<void*>(&hook_core_evaluate_d3d11_c),
+            real_core_evaluate_d3d11_c,
+            DiagnosticApi::d3d11
+        );
+        installed |= install_direct_hook(
+            core_runtime,
+            "NVSDK_NGX_D3D12_EvaluateFeature",
+            reinterpret_cast<void*>(&hook_core_evaluate_d3d12),
+            real_core_evaluate_d3d12,
+            DiagnosticApi::d3d12
+        );
+        installed |= install_direct_hook(
+            core_runtime,
+            "NVSDK_NGX_D3D12_EvaluateFeature_C",
+            reinterpret_cast<void*>(&hook_core_evaluate_d3d12_c),
+            real_core_evaluate_d3d12_c,
+            DiagnosticApi::d3d12
+        );
+        installed |= install_direct_hook(
+            core_runtime,
+            "NVSDK_NGX_D3D12_ReleaseFeature",
+            reinterpret_cast<void*>(&hook_core_release_d3d12),
+            real_core_release_d3d12,
             DiagnosticApi::d3d12
         );
     }
