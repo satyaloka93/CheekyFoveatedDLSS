@@ -291,6 +291,8 @@ extern "C" __declspec(dllexport) bool CheekyUEVR_Start(const CheekyUEVRStart* in
             // DX11 transport requires observing the private transport queue,
             // which is not exposed by UEVR. Use DX11 direct.
             if (input->renderer == 0) settings.d3d11_use_d3d12_transport = false;
+            // NR is owned by the ReShade add-on; UEVR only supplies eye tracking and foveation.
+            settings.nr_enabled = false;
             update_settings(settings); s.revision = 1;
             s.save_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
             if (!s.save_event) { s.failed = true; s.message = "Could not create persistence event"; return false; }
@@ -365,19 +367,7 @@ extern "C" __declspec(dllexport) void CheekyUEVR_Tick(std::uint64_t attachment, 
             auto settings = configured_settings(); settings.enabled = !settings.enabled; update_settings(settings); ++s.revision; request_save(s);
         }
         was_down = down;
-        static bool nr_was_down{};
-        const bool nr_down = (GetAsyncKeyState(VK_MENU) & 0x8000) &&
-            (GetAsyncKeyState(VK_SHIFT) & 0x8000) && (GetAsyncKeyState(VK_OEM_PERIOD) & 0x8000);
-        if (nr_down && !nr_was_down) {
-            auto settings = configured_settings();
-            settings.nr_enabled = !settings.nr_enabled;
-            update_settings(settings);
-            ++s.revision;
-            request_save(s);
-            trace_event("DLSS-NR hotkey Alt+Shift+> toggled enabled=%s",
-                settings.nr_enabled ? "yes" : "no");
-        }
-        nr_was_down = nr_down;
+        // DLSS-NR controls are intentionally absent from the UEVR host.
     } catch (...) { set_processing_allowed(false); }
 }
 extern "C" __declspec(dllexport) bool CheekyUEVR_Command(std::uint64_t attachment, const char* command) {
@@ -405,7 +395,7 @@ extern "C" __declspec(dllexport) bool CheekyUEVR_Command(std::uint64_t attachmen
             s.report_open.fetch_or(action == "show_report" ? 1U : 2U); SetEvent(s.save_event); return true;
         }
         if (action == "save") { request_save(s); return true; }
-        if (action == "reset_nr") { reset_dlss_nr(); return true; }
+        if (action == "reset_nr") { s.message = "DLSS-NR is owned by the ReShade add-on"; return false; }
         auto settings = configured_settings();
         if (action == "defaults") {
             settings = Settings{};
