@@ -13,6 +13,20 @@ struct GazeProjection {
     bool valid{};
 };
 
+// Convert UV between projections of the same view-space ray. UV itself is
+// not transferable between an asymmetric headset eye and a render camera.
+inline bool reproject_gaze_center(const GazeProjection& from, const GazeProjection& to,
+    float u, float v, float& out_u, float& out_v) {
+    if (!from.valid || !to.valid || !std::isfinite(u) || !std::isfinite(v) ||
+        !(from.right > from.left) || !(from.up > from.down) ||
+        !(to.right > to.left) || !(to.up > to.down)) return false;
+    const float x = from.left + u * (from.right - from.left);
+    const float y = from.up - v * (from.up - from.down);
+    out_u = (x - to.left) / (to.right - to.left);
+    out_v = (to.up - y) / (to.up - to.down);
+    return std::isfinite(out_u) && std::isfinite(out_v);
+}
+
 inline bool projection_forward_center(const GazeProjection& p, float& u, float& v) {
     if (!p.valid || !std::isfinite(p.left) || !std::isfinite(p.right) ||
         !std::isfinite(p.up) || !std::isfinite(p.down) ||

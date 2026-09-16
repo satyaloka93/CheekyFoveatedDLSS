@@ -254,7 +254,7 @@ void update_settings(const Settings& settings) noexcept {
     auto_stereo_alignment.store(settings.auto_stereo_alignment, std::memory_order_release);
     store_float(aligned_height_offset_bits, std::clamp(settings.aligned_height_offset, -1.0F, 1.0F));
     center_mode.store(
-        static_cast<std::uint32_t>(settings.center_mode) <= 2U
+        static_cast<std::uint32_t>(settings.center_mode) <= 3U
             ? static_cast<std::uint32_t>(settings.center_mode)
             : 0U,
         std::memory_order_release

@@ -841,7 +841,7 @@ void load_settings_from_reshade() noexcept {
         nullptr, config_section, "AutoStereoAlignment", settings.auto_stereo_alignment));
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "AlignedHeightOffset", settings.aligned_height_offset));
-    settings.center_mode = center_mode <= 2U
+    settings.center_mode = center_mode <= 3U
         ? static_cast<FoveationCenterMode>(center_mode)
         : FoveationCenterMode::fixed;
     static_cast<void>(reshade::get_config_value(
@@ -1204,11 +1204,12 @@ void draw_sr_controls(Settings& settings, bool& changed) {
             "Foveation center",
             &center_mode,
             "Fixed\0Runtime gaze (OpenXR / OpenVR)\0Simulated gaze (debug)\0"
+            "OpenXR gaze (shared, right eye)\0"
         )) {
         settings.center_mode = static_cast<FoveationCenterMode>(center_mode);
         changed = true;
     }
-    if (settings.center_mode == FoveationCenterMode::openxr_gaze) {
+    if (settings.center_mode == FoveationCenterMode::openxr_gaze || settings.center_mode == FoveationCenterMode::openxr_gaze_right_eye) {
         const auto gaze = gaze_diagnostics();
         const char* unavailable{};
         if (!gaze.layer_present)
@@ -1335,6 +1336,7 @@ void draw_sr_controls(Settings& settings, bool& changed) {
         &settings.alignment_border_enabled
     );
     if ((settings.center_mode == FoveationCenterMode::openxr_gaze ||
+         settings.center_mode == FoveationCenterMode::openxr_gaze_right_eye ||
          settings.center_mode == FoveationCenterMode::simulated_gaze) &&
         ImGui::TreeNode("Advanced eye tracking")) {
         changed |= ImGui::SliderFloat(
@@ -1736,6 +1738,13 @@ void on_present(
     const reshade::api::rect*
 ) {
     eye_calibration_tick();
+    if (GetModuleHandleW(L"CyberpunkVR_Stereo.dll")) {
+        static std::atomic<ULONGLONG> last_calibration_log{};
+        const auto now = GetTickCount64();
+        auto last = last_calibration_log.load();
+        if (now - last >= 5000 && last_calibration_log.compare_exchange_strong(last, now))
+            trace_event("CYBERPUNK EYE CALIBRATION %s", eye_calibration_json().c_str());
+    }
     if (queue != nullptr && queue->get_device() != nullptr &&
         queue->get_device()->get_api() == reshade::api::device_api::d3d12) {
         note_d3d12_present(

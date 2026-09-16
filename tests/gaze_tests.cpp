@@ -7,6 +7,11 @@
 #include "gaze_foveation.hpp"
 #include "gaze_math.hpp"
 #include "gaze_policy.hpp"
+#include "eye_calibration.hpp"
+#include "eye_calibration_d3d12.hpp"
+#include <future>
+#include <thread>
+#include <chrono>
 #include "streamline_viewport.hpp"
 #include "streamline_create_extent.hpp"
 #include "openvr_gaze.hpp"
@@ -1511,6 +1516,68 @@ void test_native_dynamic_resolution_extent() {
 int run_nr_lifetime_tests();
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--streamline-stereo") == 0) {
+        using namespace cheeky::foveated_dlss;
+        struct View { void* next{}; unsigned struct_type{1}, value{}; };
+        struct Entry { View viewport; unsigned resource, constants, options; };
+        const std::array<Entry, 2> entries{{{{nullptr, 1, 0}, 100, 200, 300},
+                                           {{nullptr, 1, 1}, 101, 201, 301}}};
+        View live{nullptr, 1, 0};
+        const void* inputs[]{&live};
+        for (unsigned n{}; n < 100; ++n) {
+            live.value = n % 2;
+            const auto* found = find_streamline_view<View>(entries, inputs, 1);
+            expect(found && found->resource == 100 + live.value &&
+                found->constants == 200 + live.value && found->options == 300 + live.value,
+                "reused input pointer selects its current eye's resources, constants and options");
+        }
+        live.value = 9;
+        expect(!find_streamline_view<View>(entries, inputs, 1), "unknown eye never borrows last cache");
+        live.value = 0;
+        const void* duplicate[]{&live, &live};
+        expect(!find_streamline_view<View>(entries, duplicate, 2), "ambiguous eye rejected");
+        expect(!find_streamline_view<View>(entries, nullptr, 1), "missing inputs rejected");
+        test_streamline_private_sr_viewport();
+        if (!failures) std::cout << "Streamline stereo ownership tests passed\n";
+        return failures ? 1 : 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--cyberpunk-gaze") == 0) {
+        using namespace cheeky::foveated_dlss;
+        const GazeProjection eye{-0.947191F, 1.841771F, 1.328981F, -1.328981F, true};
+        const GazeProjection render{-1.301965F, 1.301965F, 1.301965F, -1.301965F, true};
+        float u{}, v{};
+        const float forward = -eye.left / (eye.right - eye.left);
+        expect(reproject_gaze_center(eye, render, forward, 0.5F, u, v) &&
+            std::abs(u - 0.5F) < 0.0001F && std::abs(v - 0.5F) < 0.0001F,
+            "asymmetric headset forward maps to symmetric render center");
+        expect(reproject_gaze_center(eye, render, 0.327F, 0.511F, u, v) &&
+            u > 0.48F && u < 0.50F, "observed gaze is near render center, not far left");
+        expect(reproject_gaze_center(eye, render, forward + 0.1F, 0.4F, u, v) &&
+            u > 0.5F && v < 0.5F, "gaze moves right and up in render coordinates");
+        expect(!reproject_gaze_center(eye, {}, forward, 0.5F, u, v),
+            "unknown camera projection cannot be guessed");
+        struct Constants { float scale; unsigned reset; };
+        AcceptedStreamlineConstants<Constants> accepted{12, 7, {2.F, 0}, true};
+        expect(accepted.matches(12, 7, {2.F, 0}), "identical accepted constants can be reused");
+        expect(!accepted.matches(13, 7, {2.F, 0}) && !accepted.matches(12, 8, {2.F, 0}) &&
+            !accepted.matches(12, 7, {3.F, 0}) && !accepted.matches(12, 7, {2.F, 1}),
+            "different frame, eye, scale or reset must not reuse constants");
+        if (!failures) std::cout << "Cyberpunk gaze projection and constants reuse tests passed\n";
+        return failures ? 1 : 0;
+    }
+    if (argc == 2 && std::strcmp(argv[1], "--present-lock") == 0) {
+        using namespace cheeky::foveated_dlss;
+        std::unique_lock owner(calibration12_execution_mutex());
+        std::promise<void> finished;
+        auto completion = finished.get_future();
+        std::thread present([&] { eye_calibration_tick(); finished.set_value(); });
+        const bool nonblocking = completion.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+        owner.unlock();
+        present.join();
+        if (!nonblocking) { std::cerr << "Present maintenance blocked on execution lock\n"; return 1; }
+        std::cout << "Present calibration maintenance defers a busy execution lock\n";
+        return 0;
+    }
     if (argc == 2 && std::strcmp(argv[1], "--nr-lifetime") == 0) return run_nr_lifetime_tests();
     if (argc == 2 && std::strcmp(argv[1], "--nr-processing") == 0) {
         return run_nr_processing_tests();

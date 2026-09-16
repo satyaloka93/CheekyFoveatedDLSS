@@ -1,4 +1,5 @@
 #include "eye_calibration.hpp"
+#include "eye_calibration_d3d12.hpp"
 #include "dlss_nr_input.hpp"
 #include <optional>
 #include "backend.hpp"
@@ -197,6 +198,8 @@ struct NrViewportCache {
     SlViewportHandle viewport{};
     std::array<CachedSlTag, sl_tag_capacity> tags{};
     SlConstants constants{};
+    SlDlssOptions options{};
+    bool has_options{};
     std::uintptr_t constants_frame{}, tags_frame{};
     bool has_constants{}, frame_tagging{};
 };
@@ -1543,6 +1546,11 @@ void note_d3d12_command_list_submission_impl(
 void note_d3d12_present_impl(
     ID3D12CommandQueue* const present_queue
 ) noexcept {
+    // ReShade calls Present while owning its queue lock. An XR submission
+    // can own our execution lock while entering that same ReShade queue.
+    // Collection is deferrable: never wait for that lock from Present.
+    std::unique_lock execution_lock(calibration12_execution_mutex(), std::try_to_lock);
+    if (!execution_lock.owns_lock()) return;
     collect_dlss_nr_input_submissions();
     collect_dlss_nr_submissions();
     collect_peripheral_dlaa_resources();
@@ -1717,10 +1725,20 @@ void cache_streamline_tags(
     SlDlssOptions options{};
     SlViewportHandle viewport{};
     AcquireSRWLockShared(&streamline_lock);
-    const bool available = has_cached_sl_options;
+    bool available = has_cached_sl_options;
     if (available) {
         options = cached_sl_options;
         viewport = cached_sl_options_viewport;
+    }
+    if (target_viewport) {
+        available = false;
+        const auto host = target_viewport->value & ~0x60000000U;
+        for (const auto& cached : nr_viewports) {
+            if (cached.viewport.value != host) continue;
+            available = cached.has_options;
+            options = cached.options;
+            break;
+        }
     }
     ReleaseSRWLockShared(&streamline_lock);
     if (!available) {
@@ -1873,6 +1891,9 @@ struct StreamlineEvaluation {
     bool nr_input_reset{};
 };
 
+bool prepare_streamline_nr_current(StreamlineEvaluation& evaluation, const void* frame,
+    const void* const* inputs, std::uint32_t count) noexcept;
+
 // Export availability does not indicate the tagging mode enabled by the game.
 [[nodiscard]] std::uint32_t submit_streamline_tags(
     const bool frame_tagging,
@@ -1933,13 +1954,12 @@ struct StreamlineEvaluation {
     bool have_options{};
     bool have_constants{};
     AcquireSRWLockShared(&streamline_lock);
-    if (has_cached_sl_options) {
-        options = cached_sl_options;
-        have_options = true;
-    }
-    if (has_cached_sl_constants) {
-        constants = cached_sl_constants;
-        have_constants = true;
+    for (const auto& cached : nr_viewports) {
+        if (cached.viewport.value == evaluation.viewport.value && cached.has_options) {
+            options = cached.options;
+            have_options = true;
+            break;
+        }
     }
     ReleaseSRWLockShared(&streamline_lock);
     if (evaluation.has_nr_constants) { constants = evaluation.nr_constants; have_constants = true; }
@@ -2165,32 +2185,7 @@ struct StreamlineEvaluation {
     bool nr_reset,
     const StreamlineEvaluation* nr_original
 ) noexcept {
-    constexpr std::array<std::uint32_t, 4U> required{
-        sl_tag_scaling_input,
-        sl_tag_depth,
-        sl_tag_motion_vectors,
-        sl_tag_scaling_output,
-    };
-    bool cached{};
-    AcquireSRWLockShared(&streamline_lock);
-    if (has_cached_sl_viewport) {
-        cached = true;
-        evaluation.viewport = cached_sl_viewport;
-        evaluation.frame_tagging = cached_sl_frame_tagging;
-        for (std::size_t index{}; index < required.size(); ++index) {
-            const auto& source = cached_sl_tags[required[index]];
-            if (!source.present || source.resource.native == nullptr) {
-                cached = false;
-                break;
-            }
-            evaluation.resources[index] = source.resource;
-            evaluation.tags[index] = source.tag;
-            evaluation.resources[index].next = nullptr;
-            evaluation.tags[index].next = nullptr;
-            evaluation.tags[index].resource = &evaluation.resources[index];
-        }
-    }
-    ReleaseSRWLockShared(&streamline_lock);
+    bool cached = prepare_streamline_nr_current(evaluation, frame, inputs, input_count);
     if (nr_original) {
         evaluation.viewport = nr_original->viewport;
         evaluation.frame_tagging = nr_original->frame_tagging;
@@ -2415,14 +2410,8 @@ struct StreamlineEvaluation {
     }
 
     const auto set_constants = real_sl_set_constants.load(std::memory_order_acquire);
-    SlConstants constants{};
-    bool has_constants{};
-    AcquireSRWLockShared(&streamline_lock);
-    if (has_cached_sl_constants) {
-        constants = cached_sl_constants;
-        has_constants = true;
-    }
-    ReleaseSRWLockShared(&streamline_lock);
+    SlConstants constants = evaluation.nr_constants;
+    bool has_constants = evaluation.has_nr_constants;
     if (nr_original) {
         constants = nr_original->nr_constants;
         has_constants = nr_original->has_nr_constants;
@@ -2625,15 +2614,41 @@ struct StreamlineEvaluation {
                 cropped.motion_vector_scale.y
             );
         }
-        const auto constants_result = set_constants(&cropped, frame, &evaluation.cropped_viewport);
+        static std::mutex accepted_mutex;
+        static std::array<AcceptedStreamlineConstants<SlConstants>, 32> accepted{};
+        const auto frame_key = gaze_frame_key(frame);
+        bool already_accepted{};
+        {
+            std::lock_guard lock(accepted_mutex);
+            for (const auto& entry : accepted)
+                already_accepted |= entry.matches(frame_key, evaluation.cropped_viewport.value, cropped);
+        }
+        const auto constants_result = already_accepted ? 0U :
+            set_constants(&cropped, frame, &evaluation.cropped_viewport);
+        if (constants_result == 0U && !already_accepted) {
+            std::lock_guard lock(accepted_mutex);
+            // Bounded cache indexed by private viewport; collisions merely
+            // lose a reuse opportunity and never accept unknown constants.
+            auto& entry = accepted[evaluation.cropped_viewport.value % accepted.size()];
+            entry = {frame_key, evaluation.cropped_viewport.value, cropped, true};
+        }
         if (constants_result == 0U) {
             if (verbose) trace_event("SL eval=%llu motion constants applied", static_cast<unsigned long long>(sequence));
         } else {
+            // Some Streamline versions replace their stored data even when
+            // reporting a duplicate. An earlier success is no longer reusable.
+            {
+                std::lock_guard lock(accepted_mutex);
+                for (auto& entry : accepted)
+                    if (entry.viewport == evaluation.cropped_viewport.value) entry.valid = false;
+            }
             static std::atomic<unsigned> failures{};
             const auto failure = failures.fetch_add(1U);
             if (failure < 8U || failure % 600U == 0U) {
-                trace_event("SL cropped constants rejected viewport=%u private=%u result=0x%08X",
-                    evaluation.viewport.value, evaluation.cropped_viewport.value, constants_result);
+                trace_event("SL cropped constants rejected viewport=%u private=%u frame=%llu reset=%u mv=%.6f,%.6f result=0x%08X",
+                    evaluation.viewport.value, evaluation.cropped_viewport.value,
+                    static_cast<unsigned long long>(frame_key), cropped.reset,
+                    cropped.motion_vector_scale.x, cropped.motion_vector_scale.y, constants_result);
             }
             finish_d3d12_streamline(command_list, evaluation.backend, false);
             evaluation.backend = nullptr;
@@ -2694,13 +2709,14 @@ bool prepare_streamline_nr_current(StreamlineEvaluation& evaluation, const void*
     const auto key = gaze_frame_key(frame);
     bool available{};
     AcquireSRWLockShared(&streamline_lock);
-    for (const auto& cached : nr_viewports) {
+    const auto* owner = find_streamline_view<SlViewportHandle>(nr_viewports, inputs, count);
+    if (owner) {
+        const auto& cached = *owner;
         SlViewportHandle cropped{};
         std::array<const void*, 16U> redirected{};
-        if (!prepare_streamline_sr_inputs(inputs, count, cached.viewport, cropped, redirected)) continue;
-        if (!cached.has_constants || cached.constants_frame != key ||
-            (cached.frame_tagging && cached.tags_frame != key)) break;
-        available = true;
+        available = prepare_streamline_sr_inputs(inputs, count, cached.viewport, cropped, redirected) &&
+            cached.has_constants && cached.constants_frame == key &&
+            (!cached.frame_tagging || cached.tags_frame == key);
         evaluation.viewport = cached.viewport;
         evaluation.frame_tagging = cached.frame_tagging;
         evaluation.nr_constants = cached.constants;
@@ -2714,7 +2730,6 @@ bool prepare_streamline_nr_current(StreamlineEvaluation& evaluation, const void*
             evaluation.tags[i] = source.tag;
             evaluation.tags[i].resource = &evaluation.resources[i];
         }
-        break;
     }
     ReleaseSRWLockShared(&streamline_lock);
     if (!available) return false;
@@ -2818,8 +2833,9 @@ struct StreamlineNrInputScope {
         // transition when the evaluation's inputs cannot identify its owner.
         SlViewportHandle viewport{};
         AcquireSRWLockShared(&streamline_lock);
-        const bool known = has_cached_sl_options;
-        if (known) viewport = cached_sl_options_viewport;
+        const auto* owner = find_streamline_view<SlViewportHandle>(nr_viewports, inputs, count);
+        const bool known = owner != nullptr;
+        if (known) viewport = owner->viewport;
         ReleaseSRWLockShared(&streamline_lock);
         SlViewportHandle private_view{};
         std::array<const void*, 16U> validated{};
@@ -2922,6 +2938,9 @@ std::uint32_t hook_sl_dlss_set_options(
     AcquireSRWLockExclusive(&streamline_lock);
     has_cached_sl_options = supported;
     if (supported) { cached_sl_options = *options; cached_sl_options_viewport = *view; }
+    auto& cached = nr_viewport_cache(*view);
+    cached.has_options = supported;
+    if (supported) cached.options = *options;
     ReleaseSRWLockExclusive(&streamline_lock);
     if (!supported) return result;
 
@@ -3110,13 +3129,15 @@ std::uint32_t hook_sl_get_feature_function(
     return result;
 }
 
-void stamp_streamline_output(ID3D12GraphicsCommandList* list, std::uint32_t result) {
+void stamp_streamline_output(ID3D12GraphicsCommandList* list, std::uint32_t result,
+    const void* const* inputs, std::uint32_t count) {
     if (result || !eye_calibration_enabled() || !list) return;
     SlResource resource{}; SlResourceTag tag{}; std::uint64_t view{};
     AcquireSRWLockShared(&streamline_lock);
-    const auto& output = cached_sl_tags[sl_tag_scaling_output];
-    if (has_cached_sl_viewport && output.present) {
-        resource = output.resource; tag = output.tag; view = std::uint64_t(cached_sl_viewport.value) + 1;
+    const auto* owner = find_streamline_view<SlViewportHandle>(nr_viewports, inputs, count);
+    if (owner && owner->tags[sl_tag_scaling_output].present) {
+        const auto& output = owner->tags[sl_tag_scaling_output];
+        resource = output.resource; tag = output.tag; view = std::uint64_t(owner->viewport.value) + 1;
     }
     ReleaseSRWLockShared(&streamline_lock);
     if (!view || !resource.native || resource.state == 0xFFFFFFFFU) return;
@@ -3126,6 +3147,32 @@ void stamp_streamline_output(ID3D12GraphicsCommandList* list, std::uint32_t resu
     eye_calibration_stamp12(list, static_cast<ID3D12Resource*>(resource.native), view,
         tag.extent.left, tag.extent.top, resource_width(tag), resource_height(tag),
         static_cast<D3D12_RESOURCE_STATES>(resource.state));
+}
+
+// Called under streamline_evaluation_lock. Counts actual path outcomes, not
+// just gaze availability; all slots are bounded and logs are rate limited.
+void note_streamline_stereo(const void* const* inputs, std::uint32_t count,
+    const void* frame, bool native_fallback, bool prepared, bool peripheral, std::uint32_t result) {
+    struct Stats { std::uint64_t calls{}, fallback{}, foveated{}, peripheral{}, failed{}, logged{}; };
+    static std::array<Stats, 16> stats{};
+    AcquireSRWLockShared(&streamline_lock);
+    const auto* owner = find_streamline_view<SlViewportHandle>(nr_viewports, inputs, count);
+    const auto id = owner ? owner->viewport.value : UINT32_MAX;
+    const auto constants_frame = owner ? owner->constants_frame : 0;
+    ReleaseSRWLockShared(&streamline_lock);
+    if (id >= stats.size()) return;
+    auto& s = stats[id];
+    ++s.calls;
+    s.fallback += native_fallback;
+    s.foveated += prepared && result == 0;
+    s.peripheral += prepared && peripheral && result == 0;
+    s.failed += result != 0 || (!native_fallback && !prepared);
+    const auto now = GetTickCount64();
+    if (now - s.logged < 5000) return;
+    s.logged = now;
+    trace_event("SL STEREO viewport=%u frame=%llu constants_frame=%llu calls=%llu native_path=%llu foveated=%llu peripheral=%llu failed=%llu",
+        id, static_cast<unsigned long long>(gaze_frame_key(frame)),
+        static_cast<unsigned long long>(constants_frame), s.calls, s.fallback, s.foveated, s.peripheral, s.failed);
 }
 
 std::uint32_t hook_sl_evaluate_feature(
@@ -3161,14 +3208,13 @@ std::uint32_t hook_sl_evaluate_feature(
     bootstrap_streamline_options_hook();
     bool have_matching_options{};
     AcquireSRWLockShared(&streamline_lock);
-    if (has_cached_sl_options && inputs && input_count <= 32U) {
-        for (std::uint32_t i = 0; i < input_count; ++i) {
-            const auto* base = static_cast<const SlBaseStructure*>(inputs[i]);
-            if (base && std::memcmp(&base->struct_type, &cached_sl_options_viewport.struct_type,
-                    sizeof(SlStructType)) == 0 &&
-                static_cast<const SlViewportHandle*>(inputs[i])->value == cached_sl_options_viewport.value) {
-                have_matching_options = true;
-            }
+    for (const auto& cached : nr_viewports) {
+        SlViewportHandle private_view{};
+        std::array<const void*, 16U> redirected{};
+        if (cached.has_options && prepare_streamline_sr_inputs(inputs, input_count,
+                cached.viewport, private_view, redirected)) {
+            have_matching_options = true;
+            break;
         }
     }
     ReleaseSRWLockShared(&streamline_lock);
@@ -3188,6 +3234,7 @@ std::uint32_t hook_sl_evaluate_feature(
         // Those can build private features from complete evaluation metadata.
         // If no compatible NGX call occurs, the game continues in passthrough.
         const auto result = original(feature, frame, inputs, input_count, command_buffer);
+        note_streamline_stereo(inputs, input_count, frame, true, false, false, result);
         return result;
     }
     static std::atomic<std::uint64_t> evaluation_sequence{};
@@ -3242,7 +3289,7 @@ std::uint32_t hook_sl_evaluate_feature(
                 ? nr_input.original : nr_evaluation,
             result
         );
-        stamp_streamline_output(static_cast<ID3D12GraphicsCommandList*>(command_buffer), result);
+        stamp_streamline_output(static_cast<ID3D12GraphicsCommandList*>(command_buffer), result, inputs, input_count);
         return result;
     }
 
@@ -3345,7 +3392,8 @@ std::uint32_t hook_sl_evaluate_feature(
             DiagnosticState::ngx_evaluation_failed
         );
     }
-    stamp_streamline_output(command_list, result);
+    stamp_streamline_output(command_list, result, inputs, input_count);
+    note_streamline_stereo(inputs, input_count, frame, false, prepared, evaluation.peripheral_ready, result);
     return result;
 }
 

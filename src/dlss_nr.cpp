@@ -1941,9 +1941,15 @@ void reset_dlss_nr() noexcept {
 }
 
 DlssNrSnapshot dlss_nr_snapshot() noexcept {
-    std::lock_guard execution_lock(calibration12_execution_mutex());
-    std::lock_guard lock(nr_mutex);
-    return diagnostics;
+    // Overlay queries must not stall Present behind an in-flight evaluation.
+    // Keep the last complete snapshot when a producer owns either lock.
+    thread_local DlssNrSnapshot cached{};
+    std::unique_lock execution_lock(calibration12_execution_mutex(), std::try_to_lock);
+    if (!execution_lock.owns_lock()) return cached;
+    std::unique_lock lock(nr_mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return cached;
+    cached = diagnostics;
+    return cached;
 }
 
 const char* dlss_nr_state_name(const DlssNrState state) noexcept {

@@ -251,7 +251,7 @@ bool calculate_coordinated_crop(
     std::lock_guard lock(coordinator_mutex);
     state_for_view(view_id).next_jump_visible = false;
     const bool automatic = settings.auto_stereo_alignment;
-    const auto camera = active_gaze_projection.view == view_id ?
+    auto camera = active_gaze_projection.view == view_id ?
         active_gaze_projection.projection : GazeProjection{};
     // A projection belongs to the current DLSS view, so this route does not
     // depend on guessed left/right evaluation order. Require stereo and a
@@ -341,6 +341,70 @@ bool calculate_coordinated_crop(
     const auto now = qpc_now();
     diagnostics.mapping_ambiguous =
         (snapshot.status_flags & CHEEKY_GAZE_STATUS_AMBIGUOUS_RESOURCE) != 0U;
+
+    // Cyberpunk uses a symmetric game projection for both render eyes; its
+    // second viewport may not receive a separate Streamline constants call.
+    // Reuse only a recent symmetric projection in this host/session.
+    static GazeProjection cyberpunk_camera{};
+    static std::uint64_t cyberpunk_camera_session{}, cyberpunk_camera_time{};
+    const bool cyberpunk = GetModuleHandleW(L"CyberpunkVR_Stereo.dll") != nullptr;
+    if (cyberpunk_camera_session != snapshot.session_generation) {
+        cyberpunk_camera = {};
+        cyberpunk_camera_session = snapshot.session_generation;
+    }
+    if (cyberpunk && camera.valid && std::abs(camera.left + camera.right) < 0.0001F &&
+        std::abs(camera.up + camera.down) < 0.0001F) {
+        cyberpunk_camera = camera; cyberpunk_camera_time = now;
+    } else if (cyberpunk && !camera.valid && seconds_between(now, cyberpunk_camera_time) <= 0.1) {
+        camera = cyberpunk_camera;
+    }
+    // Cyberpunk's OpenXR compositor submits eye-local textures without stable
+    // resource identities, so marker calibration cannot establish a mapping.
+    // The layer still publishes the runtime's canonical right-eye gaze center.
+    // This mode intentionally bypasses texture mapping and applies one shared
+    // center to both DLSS views, matching the proven bridge behavior.
+    if (settings.center_mode == FoveationCenterMode::openxr_gaze_right_eye &&
+        snapshot.view_count >= 2U &&
+        (snapshot.status_flags & CHEEKY_GAZE_STATUS_GAZE_VALID) != 0U &&
+        // Cyberpunk's compositor does not set SESSION_FOCUSED while its
+        // presentation worker is active, although the gaze action is valid.
+        (snapshot.status_flags & CHEEKY_GAZE_STATUS_ACTION_ACTIVE) != 0U &&
+        snapshot.publication_qpc != 0U && now >= snapshot.publication_qpc &&
+        seconds_between(now, snapshot.publication_qpc) <= gaze_stale_seconds) {
+        auto& state = state_for_view(view_id);
+        const auto& source = snapshot.views[1];
+        float render_u = source.center_u, render_v = source.center_v;
+        if (cyberpunk) {
+            const GazeProjection eye{std::tan(source.fov_left), std::tan(source.fov_right),
+                std::tan(source.fov_up), std::tan(source.fov_down),
+                (source.flags & CHEEKY_GAZE_VIEW_FOV_VALID) != 0U};
+            if (!reproject_gaze_center(eye, camera, source.center_u, source.center_v, render_u, render_v))
+                return auto_crop(nullptr);
+        }
+        if (seconds_between(now, state.last_mapping_log_qpc) >= 2.0) {
+            trace_event("SHARED GAZE view=%llu source=%.4f,%.4f render=%.4f,%.4f flags=0x%X",
+                static_cast<unsigned long long>(view_id), source.center_u, source.center_v,
+                render_u, render_v, snapshot.status_flags);
+            state.last_mapping_log_qpc = now;
+        }
+        const auto temporal_result = update_gaze_temporal_policy(state.temporal,
+            {seconds_between(now, 0U), snapshot.predicted_display_time,
+             std::clamp(render_u, 0.0F, 1.0F),
+             std::clamp(render_v, 0.0F, 1.0F),
+             0.5F, 0.5F, settings.gaze_smoothing_ms, gaze_hold_seconds,
+             gaze_return_seconds, true});
+        diagnostics.using_gaze = temporal_result.using_gaze;
+        if (!state.temporal.has_filtered)
+            return auto_crop(nullptr);
+        if (resolved_center) *resolved_center = {temporal_result.center_u, temporal_result.center_v,
+            settings.gaze_quantization_pixels};
+        if (!calculate_foveation_geometry_at_center(foveation_parameters(fixed_settings),
+                {temporal_result.center_u, temporal_result.center_v, settings.gaze_quantization_pixels},
+                render_width, render_height, output_width, output_height,
+                output_origin_x, output_origin_y, crop)) return false;
+        state.last_crop = crop; state.has_crop = true;
+        return true;
+    }
 
     const auto resource_identity = canonical_identity(output_resource);
     std::uint32_t matched_index{UINT32_MAX};
@@ -719,8 +783,10 @@ void apply_next_jump_preview(Settings& settings, const DlssViewId view_id) noexc
 }
 
 GazeDiagnostics gaze_diagnostics() noexcept {
-    std::lock_guard lock(coordinator_mutex);
-    return diagnostics;
+    thread_local GazeDiagnostics cached{};
+    std::unique_lock lock(coordinator_mutex, std::try_to_lock);
+    if (lock.owns_lock()) cached = diagnostics;
+    return cached;
 }
 
 void forget_gaze_view(const DlssViewId view_id) noexcept {

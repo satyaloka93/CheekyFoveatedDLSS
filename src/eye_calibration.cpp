@@ -428,8 +428,10 @@ bool eye_calibration_enabled() noexcept {
     return enabled.load();
 }
 EyeCalibrationStats eye_calibration_stats() noexcept {
+    thread_local EyeCalibrationStats cached{};
     auto& s = state();
-    std::lock_guard lock(s.mutex);
+    std::unique_lock lock(s.mutex, std::try_to_lock);
+    if (!lock.owns_lock()) return cached;
     auto result = s.stats;
     result.enabled = enabled;
     result.in_flight =
@@ -444,6 +446,7 @@ EyeCalibrationStats eye_calibration_stats() noexcept {
     result.correction_active = result.enabled && stereo_eye_assignment(result.left_view).calibrated &&
                                stereo_eye_assignment(result.right_view).calibrated;
     result.vertical_flip = result.correction_active && stereo_eye_assignment(result.left_view).vertical_flip;
+    cached = result;
     return result;
 }
 void eye_calibration_reset_stats() noexcept {
@@ -463,6 +466,7 @@ void eye_calibration_reset_stats() noexcept {
 }
 bool eye_calibration_frame(EyeCalibrationBackend backend, std::uint64_t session_generation,
                            unsigned graphics_api) noexcept {
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     auto& s = state();
     std::lock_guard lock(s.mutex);
     const auto now = GetTickCount64();
@@ -554,6 +558,9 @@ bool eye_calibration_frame(EyeCalibrationBackend backend, std::uint64_t session_
     return false;
 }
 void eye_calibration_tick() noexcept {
+    // Present may own ReShade's queue lock; do not invert it with execution.
+    std::unique_lock execution_lock(calibration12_execution_mutex(), std::try_to_lock);
+    if (!execution_lock.owns_lock()) return;
     if (!pending)
         return;
     auto& s = state();
@@ -563,6 +570,7 @@ void eye_calibration_tick() noexcept {
 }
 void eye_calibration_stamp(ID3D11DeviceContext* context, ID3D11Resource* output, std::uint64_t view,
                            unsigned x, unsigned y, unsigned width, unsigned height) noexcept {
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     if (!enabled || !context || !output)
         return;
     try {
@@ -653,6 +661,7 @@ void eye_calibration_stamp(ID3D11DeviceContext* context, ID3D11Resource* output,
 void eye_calibration_stamp12(ID3D12GraphicsCommandList* list, ID3D12Resource* output, std::uint64_t view,
                              unsigned x, unsigned y, unsigned width, unsigned height,
                              D3D12_RESOURCE_STATES output_state) noexcept {
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     if (!enabled || !list || !output)
         return;
     try {
@@ -717,6 +726,7 @@ void eye_calibration_stamp12(ID3D12GraphicsCommandList* list, ID3D12Resource* ou
 std::uint64_t eye_calibration_submit12(ID3D12Resource* texture, ID3D12CommandQueue* queue, unsigned eye,
                                        float u0, float v0, float u1, float v1, unsigned slice,
                                        EyeCalibrationBackend backend, std::uint64_t generation) noexcept {
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     if (!enabled || !texture || !queue || eye > 1)
         return 0;
     auto& s = state();
@@ -782,6 +792,7 @@ std::uint64_t eye_calibration_submit12(ID3D12Resource* texture, ID3D12CommandQue
 std::uint64_t eye_calibration_submit(ID3D11Texture2D* texture, unsigned eye, float u0, float v0, float u1,
                                      float v1, unsigned slice, EyeCalibrationBackend backend,
                                      std::uint64_t session_generation) noexcept {
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     if (!enabled || !texture || eye > 1)
         return 0;
     auto& s = state();
@@ -866,6 +877,7 @@ void eye_calibration_unsupported_submit() noexcept {
         s.ring[s.current].invalid = true;
 }
 void eye_calibration_stop() noexcept {
+    std::lock_guard execution_lock(calibration12_execution_mutex());
     enabled = false;
     pending = false;
     auto& s = state();
