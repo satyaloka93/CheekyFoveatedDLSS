@@ -276,9 +276,15 @@ extern "C" __declspec(dllexport) bool CheekyUEVR_Start(const CheekyUEVRStart* in
             if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
                 reinterpret_cast<LPCWSTR>(&CheekyUEVR_Start), &resident)) return false;
             log_info("Cheeky UEVR " CHEEKY_VERSION " initializing; runtime remains resident until game exit");
-            if (GetModuleHandleW(L"CheekyFoveatedDLSS.addon64") || !(s.owner = claim_processing_owner())) {
-                s.message = "Another Cheeky integration is loaded. Remove its add-on and restart the game.";
+            const bool reshade_addon_loaded = GetModuleHandleW(L"CheekyFoveatedDLSS.addon64") != nullptr;
+            if (!reshade_addon_loaded && !(s.owner = claim_processing_owner())) {
+                s.message = "Another Cheeky integration is loaded; processing is unavailable.";
                 s.failed = true; log_error(s.message.c_str()); return false;
+            }
+            if (reshade_addon_loaded) {
+                // ReShade owns DLSS processing. Keep UEVR alive for eye calibration and gaze,
+                // but do not run a second foveation path or draw a second alignment border.
+                log_info("ReShade Cheeky addon detected; UEVR running calibration-only mode");
             }
             Settings settings;
             if (std::filesystem::exists(s.config)) {
@@ -291,8 +297,9 @@ extern "C" __declspec(dllexport) bool CheekyUEVR_Start(const CheekyUEVRStart* in
             // DX11 transport requires observing the private transport queue,
             // which is not exposed by UEVR. Use DX11 direct.
             if (input->renderer == 0) settings.d3d11_use_d3d12_transport = false;
-            // NR is owned by the ReShade add-on; UEVR only supplies eye tracking and foveation.
+            // NR and rendering are owned by the ReShade add-on when it is present.
             settings.nr_enabled = false;
+            if (reshade_addon_loaded) settings.enabled = false;
             update_settings(settings); s.revision = 1;
             s.save_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
             if (!s.save_event) { s.failed = true; s.message = "Could not create persistence event"; return false; }
