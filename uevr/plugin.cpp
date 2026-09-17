@@ -1,4 +1,5 @@
 #include "runtime_api.hpp"
+#include "addon_bridge.hpp"
 #include <uevr/API.h>
 #include <atomic>
 #include <array>
@@ -15,9 +16,12 @@ CheekyUEVRStartFn runtime_start{};
 CheekyUEVRDetachFn runtime_detach{};
 CheekyUEVRTickFn runtime_tick{};
 CheekyUEVRAttachOpenVRFn runtime_attach_openvr{};
+CheekyUEVRPublishStereoFn runtime_publish_stereo{};
+CheekyUEVRPublishRenderingModeFn runtime_publish_mode{};
 CheekyUEVRCommandFn runtime_command{};
 CheekyUEVRSnapshotFn runtime_snapshot{};
 std::atomic<bool> initialized{};
+bool addon_bridge{};
 std::uint64_t attachment{};
 std::atomic<void*> attached_compositor{};
 std::atomic<ULONGLONG> next_openvr_attach{};
@@ -25,6 +29,41 @@ std::mutex commands_mutex;
 std::deque<std::string> commands;
 constexpr char command_event[] = "cheeky.foveated_dlss.command.v1";
 constexpr char snapshot_event[] = "cheeky.foveated_dlss.snapshot.v1";
+
+bool publish_addon_frame(bool reset = false) {
+    // Acquire a live module reference for each call; never retain an export
+    // across addon unload/reload and never call into the addon from DllMain.
+    HMODULE addon{};
+    if (!GetModuleHandleExW(0, L"CheekyFoveatedDLSS.addon64", &addon)) return false;
+    const auto publish = reinterpret_cast<CheekyAddonPublishUEVRFn>(
+        GetProcAddress(addon, "CheekyAddon_PublishUEVRFrame"));
+    CheekyAddonUEVRFrame frame;
+    const auto* r = api->renderer;
+    const auto* vr = api->vr;
+    if (!reset && r) {
+        frame.renderer = r->renderer_type;
+        char mode[32]{};
+        if (vr && vr->get_mod_value) vr->get_mod_value("VR_RenderingMethod", mode, sizeof(mode));
+        if (mode[0] >= '0' && mode[0] <= '3' && mode[1] == '\0') frame.rendering_mode = mode[0] - '0';
+        if (r->renderer_type == UEVR_RENDERER_D3D12 && r->device && r->command_queue &&
+                vr && vr->is_hmd_active && vr->is_hmd_active() && vr->get_ue_projection_matrix &&
+                vr->get_hmd_width && vr->get_hmd_height) {
+            auto& p = frame.stereo;
+            p.output_width = vr->get_hmd_width(); p.output_height = vr->get_hmd_height();
+            UEVR_Matrix4x4f first[2]{}, second[2]{};
+            for (int eye = 0; eye < 2; ++eye) vr->get_ue_projection_matrix(eye, &first[eye]);
+            for (int eye = 0; eye < 2; ++eye) vr->get_ue_projection_matrix(eye, &second[eye]);
+            p.active = memcmp(first, second, sizeof(first)) == 0 &&
+                p.output_width == vr->get_hmd_width() && p.output_height == vr->get_hmd_height();
+            memcpy(p.matrices, first, sizeof(first));
+        }
+        if (vr && vr->is_openvr && vr->is_openvr() && api->openvr && api->openvr->get_vr_compositor)
+            frame.openvr_compositor = reinterpret_cast<void*>(api->openvr->get_vr_compositor());
+    }
+    const bool accepted = publish && publish(&frame);
+    FreeLibrary(addon);
+    return accepted;
+}
 
 void on_custom_event(const char* event, const char* data) {
     if (!initialized || !event || !data || strcmp(event, command_event) != 0 || strnlen_s(data, 8193) > 8192) return;
@@ -42,6 +81,7 @@ void publish_snapshot() {
 void on_present() {
     if (!initialized || !api) return;
     try {
+        if (addon_bridge) { publish_addon_frame(); return; }
         if (api->vr && api->vr->is_openvr && api->vr->is_openvr() && api->openvr && api->openvr->get_vr_compositor) {
             auto* compositor = reinterpret_cast<void*>(api->openvr->get_vr_compositor());
             const auto now = GetTickCount64();
@@ -56,6 +96,34 @@ void on_present() {
         }
         const auto* r = api->renderer;
         if (runtime_tick && r && attachment) runtime_tick(attachment, r->renderer_type, r->device, r->command_queue);
+        if (runtime_publish_mode && attachment) {
+            char value[32]{};
+            if (api->vr && api->vr->get_mod_value) api->vr->get_mod_value("VR_RenderingMethod", value, sizeof(value));
+            const auto mode = value[0] >= '0' && value[0] <= '3' && value[1] == '\0'
+                ? static_cast<unsigned>(value[0] - '0') : UINT32_MAX;
+            runtime_publish_mode(attachment, mode);
+        }
+        if (runtime_publish_stereo && attachment) {
+            CheekyUEVRStereoProjection projection;
+            if (r && r->renderer_type == UEVR_RENDERER_D3D12 && r->device && r->command_queue &&
+                    api->vr && api->vr->is_hmd_active && api->vr->is_hmd_active() &&
+                    api->vr->get_ue_projection_matrix && api->vr->get_hmd_width && api->vr->get_hmd_height) {
+                projection.output_width = api->vr->get_hmd_width();
+                projection.output_height = api->vr->get_hmd_height();
+                projection.active = 1;
+                UEVR_Matrix4x4f first[2]{}, second[2]{};
+                for (int eye = 0; eye < 2; ++eye) {
+                    api->vr->get_ue_projection_matrix(eye, &first[eye]);
+                }
+                for (int eye = 0; eye < 2; ++eye) api->vr->get_ue_projection_matrix(eye, &second[eye]);
+                // Public getter copies UE's projection in its native memory
+                // order. Reject either eye or extent changing across the pair.
+                if (memcmp(first, second, sizeof(first)) != 0 || projection.output_width != api->vr->get_hmd_width() ||
+                        projection.output_height != api->vr->get_hmd_height()) projection.active = 0;
+                memcpy(projection.matrices, first, sizeof(first));
+            }
+            runtime_publish_stereo(attachment, &projection);
+        }
         std::deque<std::string> pending;
         { std::lock_guard lock(commands_mutex); pending.swap(commands); }
         for (const auto& command : pending) {
@@ -72,6 +140,7 @@ void on_present() {
     } catch (...) { if (api->functions->log_error) api->functions->log_error("Cheeky UEVR callback failed"); }
 }
 void on_device_reset() {
+    if (addon_bridge) { publish_addon_frame(true); return; }
     attached_compositor = nullptr;
     next_openvr_attach = 0;
     if (runtime_tick && attachment) runtime_tick(attachment, 0, nullptr, nullptr);
@@ -87,10 +156,28 @@ extern "C" __declspec(dllexport) bool uevr_plugin_initialize(const UEVR_PluginIn
     try {
         if (!input || !input->version || input->version->major != UEVR_PLUGIN_VERSION_MAJOR ||
             input->version->minor < UEVR_PLUGIN_VERSION_MINOR || !input->functions || !input->callbacks || !input->renderer) return false;
-        if (!input->functions->get_persistent_dir || !input->functions->dispatch_lua_event || !input->functions->remove_callback ||
-            !input->callbacks->on_present || !input->callbacks->on_device_reset || !input->callbacks->on_custom_event) return false;
+        if (!input->functions->remove_callback || !input->callbacks->on_present || !input->callbacks->on_device_reset) return false;
         if (initialized) return true;
         api = input;
+        if (GetModuleHandleW(L"CheekyFoveatedDLSS.addon64")) {
+            if (!publish_addon_frame()) {
+                if (api->functions->log_error) api->functions->log_error("Cheeky ReShade bridge unavailable; install the matching addon and restart.");
+                return false;
+            }
+            addon_bridge = true;
+            const bool a = api->callbacks->on_present(on_present);
+            const bool b = api->callbacks->on_device_reset(on_device_reset);
+            if (!a || !b) {
+                if (a) api->functions->remove_callback(reinterpret_cast<void*>(&on_present));
+                if (b) api->functions->remove_callback(reinterpret_cast<void*>(&on_device_reset));
+                publish_addon_frame(true); return false;
+            }
+            initialized = true;
+            if (api->functions->log_info) api->functions->log_info("Cheeky UEVR projection bridge active; ReShade owns SR/NR and controls. Lua is not required.");
+            return true;
+        }
+        if (!input->functions->get_persistent_dir || !input->functions->dispatch_lua_event ||
+                !input->callbacks->on_custom_event) return false;
         std::vector<wchar_t> path(32768);
         const auto length = GetModuleFileNameW(module, path.data(), static_cast<DWORD>(path.size()));
         if (!length || length >= path.size()) return false;
@@ -106,6 +193,8 @@ extern "C" __declspec(dllexport) bool uevr_plugin_initialize(const UEVR_PluginIn
             !load_export(dll, "CheekyUEVR_AttachOpenVR", runtime_attach_openvr)) {
             runtime_detach = nullptr; FreeLibrary(dll); return false;
         }
+        load_export(dll, "CheekyUEVR_PublishStereo", runtime_publish_stereo); // Additive, optional for older resident runtimes.
+        load_export(dll, "CheekyUEVR_PublishRenderingMode", runtime_publish_mode);
         HMODULE pinned{};
         if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,
             reinterpret_cast<LPCWSTR>(runtime_start), &pinned)) {

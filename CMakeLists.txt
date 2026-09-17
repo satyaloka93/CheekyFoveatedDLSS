@@ -144,6 +144,8 @@ add_executable(
     "${CMAKE_CURRENT_SOURCE_DIR}/src/eye_calibration_d3d12.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/d3d12_composite_tests.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/motion_resample_tests.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tests/d3d12_history_tests.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/d3d12_backend.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/src/crop_motion.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/support_summary_tests.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/nr_processing_tests.cpp"
@@ -187,6 +189,7 @@ add_executable(CheekyNrObserverTests
     tests/nr_observer_tests.cpp tests/nr_lifetime_tests.cpp tests/d3d12_composite_tests.cpp
     src/crop_motion.cpp src/dlss_nr_lifetime.cpp src/dlss_nr_input.cpp src/dlss_nr_contract.cpp
     src/d3d12_output_contract.cpp src/foveation.cpp src/settings.cpp src/graphics_observer.cpp
+    src/d3d12_ngx_dispatch.cpp
     third_party/reshade/deps/minhook/src/buffer.c
     third_party/reshade/deps/minhook/src/hook.c
     third_party/reshade/deps/minhook/src/trampoline.c
@@ -251,6 +254,8 @@ if(CHEEKY_BUILD_UEVR)
     add_dependencies(CheekyFoveatedDLSSUEVR CheekyFoveatedDLSSRuntime)
     add_dependencies(CheekyUEVRTests CheekyFoveatedDLSSUEVR CheekyFakeNGX CheekyFakeStreamline CheekyFakeOpenVR)
     add_test(NAME CheekyUEVRHost COMMAND CheekyUEVRTests)
+    add_test(NAME CheekyUEVRAddonBridge COMMAND CheekyUEVRTests --addon-bridge)
+    add_test(NAME CheekyAfwCore COMMAND CheekyTests --afw-core)
     add_test(NAME CheekyUEVROwnership COMMAND CheekyUEVRTests --conflict)
     add_test(NAME CheekyUEVRDX11 COMMAND CheekyUEVRTests --dx11)
     foreach(abi 022 027 028 029)
@@ -258,5 +263,11 @@ if(CHEEKY_BUILD_UEVR)
     endforeach()
     foreach(mode dx11 dx11-c dx12 dx12-c streamline streamline-dx11)
         add_test(NAME CheekyLateAttach-${mode} COMMAND CheekyUEVRTests --late-${mode})
+    endforeach()
+    foreach(mode dx11 dx11-c streamline-dx11 dx12 dx12-c streamline)
+        add_test(NAME CheekyInactiveAfw-${mode} COMMAND CheekyUEVRTests --late-${mode} --inactive-afw)
+    endforeach()
+    foreach(mode native native-c streamline missing-lower public-first public-first-c ota ota-c ota-streamline ota-ambiguous)
+        add_test(NAME CheekyAfw-${mode} COMMAND CheekyUEVRTests --afw-${mode})
     endforeach()
 endif()

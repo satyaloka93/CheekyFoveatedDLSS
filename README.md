@@ -10,6 +10,16 @@ Reduce the cost of DLSS Super Resolution by concentrating it on the center of th
 - A D3D11 or D3D12 game with DLSS Super Resolution.
 - Either ReShade **with full add-on support**, or UEVR with a compatible plugin API.
 
+## Compatibility
+This should work with most games that have DLSS. Here is a non-exhaustive list of community reports whether a game is supported. 
+
+[**Compatibility List**](https://docs.google.com/spreadsheets/d/1BY-OAfYzkDefQWvpHCd_bhzDdIYlTb6RkptmV1h70Ng/edit?usp=sharing) 
+
+Disclaimer: If a game is not on this list or the game is marked as not-working, this does not necessarily mean it is not supported. 
+These are user submitted reports and issues may be user specific. 
+
+Please help maintain and expand this list by submitting if a game has worked for you using the [**Survey Link**](https://tally.so/r/eqVaWJ)
+
 ## Installation
 
 Close the game and choose **one** integration. Do not load the Cheeky Reshade add-on and plugin together.
@@ -49,7 +59,7 @@ Keep **Automatic stereo alignment** and **Automatic eye calibration** enabled. M
 
 1. Enable DLSS in the game's graphics settings and open Cheeky's controls.
 2. Start with the defaults and **Foveation center → Fixed**. Fixed placement still uses automatic stereo alignment and calibration in VR.
-3. Enable the red alignment border. Verify it overlaps 100%, it should appear as one rectangle. If it does not in **Diagnostics → Eye calibration** (under **Diagnostics and support** in UEVR), check for **Active**, valid samples and correctly placed regions in both eyes. Turn the border off afterward.
+3. Enable the red alignment border. Verify it overlaps 100%, it should appear as one rectangle. If it does not in **Diagnostics → Eye calibration** (under **Stereo and gaze** in UEVR), check for **Active** and correctly placed regions in both eyes. Turn the border off afterward.
 4. Adjust fovea width/height, height offset and transition width to taste. Sliders apply on release.
 
 If calibration stays inactive or reports manual fallback, check the installed layer and collect a support report. Do not rely on a manual eye-order adjustment staying correct across scenes, but you can use it to see the effect.
@@ -61,6 +71,13 @@ Start with defaults, then compare native and foveated DLSS timings in the perfor
 - **Eye tracking:** select **Runtime gaze (OpenXR / OpenVR)** only with a compatible eye-tracked headset and runtime. Quest 3 users should use **Fixed** with automatic alignment.
 - **DLSS-NR:** experimental and off by default. Compatible NVIDIA runtimes must be supplied separately. Read the [DLSS-NR instructions](USAGE.md#experimental-dlss-nr-support) before enabling it.
 - [Full settings reference](USAGE.md) · [Eye calibration details and limitations](EYE-CALIBRATION.md)
+
+## Troubleshooting
+1. Use latest DLSS files using DLSS Swapper
+2. Make sure no overrides are set in NVidia Profile Inspector, NVidia App, or DLSS Swapper
+3. I found games don't like some presets (Example Mortal Shell 2 causes smearing if center region is set to Preset K). Try other Presets.
+4. UEVR AFW supports DX12 SR and NR with fixed or gaze-driven coverage using the public AFW UEVR build. Start with Automatic under Stereo and gaze; performance figures and reporting are under Performance and Support. See the [AFW setup and compatibility notes](uevr/README.md#afw).
+5. Eye Tracking: You can use https://github.com/maluoi/openxr-explorer to verify eye tracking works
 
 ## Eye tracking (experimental)
 

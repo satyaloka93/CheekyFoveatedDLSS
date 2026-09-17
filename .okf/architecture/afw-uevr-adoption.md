@@ -8,7 +8,14 @@ timestamp: 2026-09-17T00:00:00Z
 
 # Current source boundary
 
-The active `fixes` checkout does not contain the AFW implementation. The
+The AFW implementation has now been integrated into the `fixes` working tree
+from upstream `a1c2a11`, preserving the fork's Cyberpunk and resource-lifetime
+changes. ReShade owns processing; the UEVR plugin forwards copied frame data
+through the versioned `CheekyAddon_PublishUEVRFrame` export, acquiring and
+releasing a module reference per call. No Lua or second runtime is needed on
+this route. See `uevr/README.md` and `scripts/test-afw-reshade.ps1`.
+
+The earlier investigation used the
 remaining `merge/upstream-afw` worktree contains the reference implementation
 at `42e0ae0`, built around the AFW feature sequence `8000e2e` through
 `d2e146e` and later non-AFW compatibility fixes.
@@ -43,9 +50,9 @@ automatic coverage; runtime gaze still needs the matching gaze source.
    effective coverage. The CMake suite includes active/inactive AFW, missing
    lower-route, runtime-discovery, history, and menu tests.
 
-# Recommended adoption order
+# Original adoption plan
 
-Do not cherry-pick only the Lua controls or UEVR exports. First port the
+The implementation needs more than the Lua controls or UEVR exports. Port the
 dispatcher/re-entry guard and AFW runtime observer into the current `fixes`
 hook architecture, then add projection publication, source-eye depth binding,
 and AFW coverage/history handling. Re-run the AFW fixture tests before any
@@ -63,3 +70,16 @@ Cyberpunk gaze/stereo isolation fixes.
   only the nested private SR/NR pass.
 - AFW coverage is valid only while UEVR has published a recent DX12 projection
   and rendering mode; stale data falls back to centered coverage.
+
+# Validation scope
+
+The focused suite exercises the actual UEVR plugin with a mock addon receiver,
+including initialization without Lua, projection/mode forwarding, reset and
+module release. AFW core tests exercise routing, gaze, projection expiry and
+coverage; GPU history tests cover alternate-eye crop correction. Cyberpunk
+stereo/gaze and nonblocking Present checks are retained.
+
+The general standalone UEVR suite still expects NR keys removed by this fork
+and fails at `Parse Cinematic style`. It is not evidence for the ReShade bridge
+and has not been declared passing. Actual NVIDIA inference and headset output
+are outside the focused fixtures. No game deployment was performed.

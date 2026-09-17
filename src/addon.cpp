@@ -12,6 +12,10 @@
 #include "cheeky_gaze_abi.h"
 #include "version.h"
 #include "processing_owner.hpp"
+#include "afw_compatibility.hpp"
+#include "d3d12_ngx_dispatch.hpp"
+#include "openvr_gaze.hpp"
+#include "../uevr/addon_bridge.hpp"
 
 #define ImTextureID ImU64
 #include <imgui.h>
@@ -24,6 +28,7 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <mutex>
 
 namespace cheeky::foveated_dlss {
 namespace {
@@ -39,6 +44,10 @@ constexpr char config_section[] = "CheekyFoveatedDLSS";
 std::atomic<bool> toggle_hotkey_down{};
 std::atomic<bool> nr_toggle_hotkey_down{};
 HANDLE processing_owner{};
+std::mutex uevr_bridge_mutex;
+bool uevr_bridge_ready{}, uevr_bridge_attached{};
+void* uevr_bridge_compositor{};
+ULONGLONG uevr_bridge_next_openvr{};
 
 struct DiagnosticDisplayCache {
     DiagnosticSnapshot snapshot{};
@@ -801,6 +810,9 @@ void load_settings_from_reshade() noexcept {
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "CenterSupersampling", settings.center_supersampling
     ));
+    static_cast<void>(reshade::get_config_value(nullptr, config_section, "AfwManualCoverage", settings.afw_manual_coverage));
+    static_cast<void>(reshade::get_config_value(nullptr, config_section, "AfwAutomaticCoverage", settings.afw_automatic_coverage));
+    static_cast<void>(reshade::get_config_value(nullptr, config_section, "AfwWarpMargin", settings.afw_warp_margin));
     static_cast<void>(reshade::get_config_value(
         nullptr, config_section, "PeripheralDlaaPreset",
         settings.peripheral_dlaa_preset
@@ -969,6 +981,9 @@ void save_settings_to_reshade(const Settings& settings) noexcept {
     reshade::set_config_value(
         nullptr, config_section, "CenterSupersampling", settings.center_supersampling
     );
+    reshade::set_config_value(nullptr, config_section, "AfwManualCoverage", settings.afw_manual_coverage);
+    reshade::set_config_value(nullptr, config_section, "AfwAutomaticCoverage", settings.afw_automatic_coverage);
+    reshade::set_config_value(nullptr, config_section, "AfwWarpMargin", settings.afw_warp_margin);
     reshade::set_config_value(
         nullptr, config_section, "PeripheralDlaaPreset",
         settings.peripheral_dlaa_preset
@@ -1143,6 +1158,23 @@ void draw_sr_controls(Settings& settings, bool& changed) {
             changed = true;
         }
     };
+    const auto afw = afw_compatibility_status();
+    if (afw.enabled) {
+        const auto projection = afw_stereo_projection();
+        ImGui::Text("AFW: %s | UEVR projections: %s",
+            afw.rendering_mode_known ? (afw.rendering_mode == 3 ? "selected" : "not selected") : "mode unavailable",
+            projection.valid ? "ready" : "waiting");
+        if (afw.coverage_enabled) {
+            int coverage = settings.afw_automatic_coverage ? 2 : settings.afw_manual_coverage ? 1 : 0;
+            if (ImGui::Combo("AFW stereo coverage", &coverage, "Centered (70% minimum)\0Manual\0Automatic\0")) {
+                settings.afw_manual_coverage = coverage == 1;
+                settings.afw_automatic_coverage = coverage == 2;
+                changed = true;
+            }
+            changed |= ImGui::SliderFloat("AFW extra margin per edge", &settings.afw_warp_margin, 0.F, .25F, "%.3f");
+            ImGui::TextDisabled("Coverage includes both eyes; gaze uses this mode as its tracking-loss fallback.");
+        }
+    }
     changed |= ImGui::Checkbox("Enable foveated DLSS-SR", &settings.enabled);
     ImGui::SameLine();
     ImGui::TextDisabled("(Alt+Shift+/)");
@@ -2044,6 +2076,7 @@ extern "C" __declspec(dllexport) bool AddonInit(
     reshade::register_event<reshade::addon_event::destroy_resource>(&on_gaze_destroy_resource);
     log_info("Foveated DLSS-SR and DLSS-NR interception started for D3D11 and D3D12.");
     trace_event("AddonInit complete");
+    { std::lock_guard lock(uevr_bridge_mutex); uevr_bridge_ready = true; }
     return true;
 }
 
@@ -2053,6 +2086,12 @@ extern "C" __declspec(dllexport) void AddonUninit(
 ) {
     using namespace cheeky::foveated_dlss;
     reshade::unregister_event<reshade::addon_event::present>(&on_present);
+    {
+        std::lock_guard lock(uevr_bridge_mutex);
+        uevr_bridge_ready = uevr_bridge_attached = false;
+        uevr_bridge_compositor = nullptr;
+        allow_afw_stereo_projection(false);
+    }
     reshade::unregister_event<reshade::addon_event::copy_resource>(&on_gaze_copy_resource);
     reshade::unregister_event<reshade::addon_event::copy_texture_region>(&on_gaze_copy_texture);
     reshade::unregister_event<reshade::addon_event::resolve_texture_region>(&on_gaze_resolve);
@@ -2074,6 +2113,31 @@ extern "C" __declspec(dllexport) void AddonUninit(
     close_trace_log();
     if (processing_owner) CloseHandle(processing_owner);
     processing_owner = nullptr;
+}
+
+extern "C" __declspec(dllexport) bool CheekyAddon_PublishUEVRFrame(const CheekyAddonUEVRFrame* frame) {
+    using namespace cheeky::foveated_dlss;
+    if (!valid_addon_uevr_frame(frame)) return false;
+    try {
+        std::lock_guard lock(uevr_bridge_mutex);
+        if (!uevr_bridge_ready) return false;
+        if (!uevr_bridge_attached) {
+            allow_afw_stereo_projection(true);
+            uevr_bridge_attached = true;
+            log_info("UEVR projections received by ReShade; addon remains the sole processing owner.");
+        }
+        publish_afw_rendering_mode(frame->renderer == 1 ? frame->rendering_mode : UINT32_MAX);
+        const auto& p = frame->stereo;
+        publish_afw_stereo_projection(p.matrices, p.output_width, p.output_height,
+            frame->renderer == 1 && p.active == 1);
+        const auto now = GetTickCount64();
+        if (!frame->openvr_compositor) uevr_bridge_compositor = nullptr;
+        else if (frame->openvr_compositor != uevr_bridge_compositor && now >= uevr_bridge_next_openvr) {
+            uevr_bridge_next_openvr = now + 250;
+            if (attach_openvr_compositor(frame->openvr_compositor)) uevr_bridge_compositor = frame->openvr_compositor;
+        }
+        return true;
+    } catch (...) { return false; }
 }
 
 BOOL APIENTRY DllMain(
