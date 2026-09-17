@@ -3,6 +3,7 @@
 ## 2026-09-17
 
 * **Consolidation**: The active `fixes` checkout now contains the intended combined Cheeky work and records the Cyberpunk port-side frame-clock correction that restored second-view gaze processing.
+* **AFW investigation**: Analyzed `merge/upstream-afw` and documented the required UEVR publication, NGX re-entry protection, verified source-eye metadata, projection-aware coverage/history, and test boundaries. The reference diff is not merged wholesale because it predates current Cyberpunk gaze/stereo fixes.
 
 ## 2026-09-15
 
