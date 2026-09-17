@@ -10,14 +10,14 @@ inferred; where something is inferred it says so.
 * [System Shock Remake](system-shock-remake.md) — the D3D11 transport route; capability fix untested.
 * [Silent Hill f](silent-hill-f.md) — Native Stereo Fix mismatch confirmed by user; eye tracking unresolved.
 
-## Deployed binaries as of 2026-09-07
+## Deployed binaries as of 2026-09-17
 
 | Target | md5 | deployed |
 |---|---|---|
 | repo `bin/Release` (HEAD + uncommitted capability fix) | `ce3b143f2b57c9e1dc9b270ec0f2187a` | built 09-05 12:21 |
-| The Outer Worlds 2 | `faf0b1955f30bf7245fec279b0dc342e` | 09-05 09:45 |
+| The Outer Worlds 2 | `d0c6922ce6bd26e46279a0d7bd816e4306027a9439b1c6a2b712a6cddd2307fb` (SHA256) | 09-17 AFW bridge |
 | System Shock Remake | `ce3b143f2b57c9e1dc9b270ec0f2187a` | 09-05 12:21 |
-| Silent Hill f | `fa1d405d08b2e1f556470921965175f6` | 09-04 08:55 |
+| Silent Hill f | `d0c6922ce6bd26e46279a0d7bd816e4306027a9439b1c6a2b712a6cddd2307fb` (SHA256) | 09-17 AFW bridge |
 
 TOW2 predates commits `280d4d2` (10:09) and `1b33e30` (11:04) by clock time, but its log shows
 `Direct detour installed export=NVSDK_NGX_D3D12_EvaluateFeature` — the build was made and

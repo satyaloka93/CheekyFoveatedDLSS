@@ -3,12 +3,23 @@ type: title-profile
 title: Silent Hill f
 description: User confirms Native Stereo Fix causes eye mismatch; eye tracking remains unresolved.
 tags: [silent-hill, d3d12, stereo]
-timestamp: 2026-09-08
+timestamp: 2026-09-17
 ---
 
 # Silent Hill f
 
-## Current finding — 2026-09-08
+## Current finding — 2026-09-17
+
+The AFW ReShade-owned bridge build from commit `3c15aa4` is deployed to
+`SHf/Binaries/Win64`. The addon SHA256 is
+`d0c6922ce6bd26e46279a0d7bd816e4306027a9439b1c6a2b712a6cddd2307fb`; the
+matching UEVR projection bridge is installed in
+`%APPDATA%/UnrealVRMod/SHf-Win64-Shipping/plugins` with SHA256
+`1acabb6b31020586a03b00a1287fe41842d9b4d837b15a78d995c016228aeadd`.
+Existing binaries were preserved with `.pre-20260917-afw-bridge.bak` suffixes.
+No ReShade or UEVR settings were changed. Headset validation is pending.
+
+## Historical finding — 2026-09-08
 
 User explicitly confirms Native Stereo Fix causes the left/right image mismatch in SHf and is incompatible with their setup. Keep it OFF for this title. Earlier overlapping Cheeky/OFXR experiments do not establish those layers as the cause of this mismatch. Eye tracking remains unresolved.
 

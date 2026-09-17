@@ -2,6 +2,8 @@
 
 ## 2026-09-17
 
+* Deployed commit `3c15aa4`'s ReShade-owned AFW addon and UEVR projection bridge to Silent Hill f and The Outer Worlds 2. Existing binaries were backed up; settings were left unchanged. Headset/game validation is pending.
+
 * Integrated upstream AFW with the fork's existing fixes and added a ReShade-owned UEVR projection bridge. Lua and a second renderer are unnecessary on this path. Preserved blink hold while restoring AFW focus-reacquisition history reset. Added focused bridge/core/history regression coverage; game validation remains pending.
 
 * **Consolidation**: The active `fixes` checkout now contains the intended combined Cheeky work and records the Cyberpunk port-side frame-clock correction that restored second-view gaze processing.

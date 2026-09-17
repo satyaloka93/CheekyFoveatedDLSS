@@ -3,11 +3,22 @@ type: title-profile
 title: The Outer Worlds 2
 description: Native D3D12 UE5 title run under UEVR; dispatcher fix verified working, stereo geometry and frame cost still open.
 tags: [tow2, uevr, vr, d3d12, streamline]
-timestamp: 2026-09-07
+timestamp: 2026-09-17
 resource: "steam://run/1449110"
 ---
 
 # The Outer Worlds 2
+
+## AFW bridge deployment — 2026-09-17
+
+The AFW ReShade-owned bridge build from commit `3c15aa4` is deployed to
+`Arkansas/Binaries/Win64`. The addon SHA256 is
+`d0c6922ce6bd26e46279a0d7bd816e4306027a9439b1c6a2b712a6cddd2307fb`; the
+matching UEVR projection bridge is installed in
+`%APPDATA%/UnrealVRMod/TheOuterWorlds2-Win64-Shipping/plugins` with SHA256
+`1acabb6b31020586a03b00a1287fe41842d9b4d837b15a78d995c016228aeadd`.
+Existing binaries were preserved with `.pre-20260917-afw-bridge.bak` suffixes.
+No ReShade or UEVR settings were changed. Headset validation is pending.
 
 `F:\SteamLibrary\steamapps\common\TheOuterWorlds2\Arkansas\Binaries\Win64\`
 
