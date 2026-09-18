@@ -64,7 +64,18 @@ void enable_afw_compatibility() noexcept { afw_enabled.store(true, std::memory_o
 bool afw_compatibility_enabled() noexcept { return afw_enabled.load(std::memory_order_acquire); }
 void publish_afw_rendering_mode(unsigned mode) noexcept {
     std::lock_guard lock(afw_projection_mutex);
-    if (host_rendering_mode != mode) ++afw_projection_generation;
+    if (host_rendering_mode != mode) {
+        // A live AFW <-> native transition invalidates the eye/resource
+        // association used by the nested NGX path.  Advance the generation
+        // before publishing the new mode so in-flight copies cannot be reused
+        // by the next frame.
+        ++afw_projection_generation;
+        {
+            std::lock_guard depth_lock(depth_eyes_mutex);
+            depth_eyes = {};
+        }
+        afw_projection_cache = {};
+    }
     host_rendering_mode = mode <= 3 ? mode : UINT32_MAX;
     host_rendering_mode_ms = GetTickCount64();
 }

@@ -3,7 +3,7 @@ type: title-profile
 title: The Outer Worlds 2
 description: Native D3D12 UE5 title run under UEVR; dispatcher fix verified working, stereo geometry and frame cost still open.
 tags: [tow2, uevr, vr, d3d12, streamline]
-timestamp: 2026-09-17
+timestamp: 2026-09-18
 resource: "steam://run/1449110"
 ---
 
@@ -82,3 +82,16 @@ NrTransitionWidth=0.08                NrWorkingScale=0.8   NrIntensity=2
 Run under UEVR. `VR_AFW_FramewarpMode=0` (AFW off) as of 2026-09-07 — enabling AFW mid-session
 produced `DXGI_ERROR_DEVICE_REMOVED` (`0x887A0005`) and a lockup. UEVR's own log lives with the
 UEVR backend, **not** in the game folder.
+
+## AFW transition hardening — 2026-09-18
+
+The 2026-09-18 run showed that Cheeky loaded and processed both eyes, but a
+live AFW toggle coincided with UEVR's `FViewport::Draw` vtable-mismatch path and
+a title hang dump. The bridge now invalidates the AFW projection cache and
+depth-to-eye associations whenever `VR_RenderingMethod` changes, before the new
+mode is published. This prevents stale per-eye GPU resources from crossing a
+native/AFW transition. The rebuilt addon is deployed to TOW2; source and target
+hashes match (`17aad8dcdf716450617c1e3c5c5db8b76f2b367232af1276d939ad0fa3043226`).
+
+The focused AFW routing test passes. The full UEVR test binary still has the
+pre-existing `Parse Cinematic style` fixture failure, unrelated to this change.

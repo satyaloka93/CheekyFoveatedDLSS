@@ -1,5 +1,13 @@
 # Change log
 
+## 2026-09-18
+
+* Hardened live AFW/native transitions by invalidating projection and depth-eye
+  state before publishing a changed rendering mode. Deployed and hash-verified
+  the rebuilt TOW2 addon; focused AFW routing passed. A TOW2 live-toggle hang
+  remains a UEVR `FViewport::Draw` vtable-mismatch risk, so mode changes should
+  be treated as restart-boundary operations until the next game run confirms it.
+
 ## 2026-09-17
 
 * Deployed commit `3c15aa4`'s ReShade-owned AFW addon and UEVR projection bridge to Silent Hill f and The Outer Worlds 2. Existing binaries were backed up; settings were left unchanged. Headset/game validation is pending.
