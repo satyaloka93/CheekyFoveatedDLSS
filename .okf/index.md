@@ -16,4 +16,4 @@ Start here: [Getting started](getting-started.md).
 * [Decisions](decisions/) — standing policy for this fork.
 
 A running, shared-between-agents task log lives outside the bundle at
-[/WORKLOG.md](../WORKLOG.md) — that file is volatile; this bundle is what has been *established*.
+`WORKLOG.md` — that local file is volatile and not published; this bundle is what has been *established*.

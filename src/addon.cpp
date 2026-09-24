@@ -1815,6 +1815,30 @@ void on_present(
         trace_event("DLSS-NR hotkey Alt+Shift+> toggled enabled=%s",
             settings.nr_enabled ? "yes" : "no");
     }
+
+    // Log menu changes as well as hotkeys, without depending on an open UI.
+    // Per-thread state avoids adding another lock to the Present hot path.
+    static thread_local ULONGLONG last_cost_log{};
+    static thread_local int last_cost_state = -1;
+    const auto now = GetTickCount64();
+    const int state = (settings.enabled ? 1 : 0) | (settings.nr_enabled ? 2 : 0);
+    if (state != last_cost_state || now - last_cost_log >= 5000) {
+        const auto timing = gpu_timing_status();
+        const auto native = diagnostic_timing_reading(DiagnosticGpuTiming::d3d12_native_dlss);
+        const auto foveated = diagnostic_timing_reading(DiagnosticGpuTiming::d3d12_foveated_dlss);
+        const auto peripheral = diagnostic_timing_reading(DiagnosticGpuTiming::d3d12_peripheral_dlaa);
+        trace_event("[Cheeky cost] enabled=%d nr=%d transition=%d native_gpu_ms=%.4f native_samples=%llu native_age_ms=%.0f foveated_gpu_ms=%.4f foveated_samples=%llu foveated_age_ms=%.0f peripheral_gpu_ms=%.4f peripheral_samples=%llu peripheral_age_ms=%.0f recorded=%llu submitted=%llu completed=%llu published=%llu discarded=%llu failures=%llu waiting_submit=%u waiting_gpu=%u",
+            settings.enabled ? 1 : 0, settings.nr_enabled ? 1 : 0, state != last_cost_state ? 1 : 0,
+            native.mean_ms, static_cast<unsigned long long>(native.samples), native.age_ms,
+            foveated.mean_ms, static_cast<unsigned long long>(foveated.samples), foveated.age_ms,
+            peripheral.mean_ms, static_cast<unsigned long long>(peripheral.samples), peripheral.age_ms,
+            static_cast<unsigned long long>(timing.recorded), static_cast<unsigned long long>(timing.submitted),
+            static_cast<unsigned long long>(timing.completed), static_cast<unsigned long long>(timing.published),
+            static_cast<unsigned long long>(timing.discarded), static_cast<unsigned long long>(timing.failures),
+            timing.waiting_submission, timing.waiting_gpu);
+        last_cost_state = state;
+        last_cost_log = now;
+    }
 }
 
 std::uint64_t gaze_resource_identity(reshade::api::resource resource) {

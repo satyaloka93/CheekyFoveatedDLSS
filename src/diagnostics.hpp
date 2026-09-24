@@ -54,6 +54,13 @@ enum class DiagnosticState : std::uint32_t {
     streamline_waiting_for_ngx,
 };
 
+struct DiagnosticTimingReading {
+    double mean_ms{}, age_ms{-1.0};
+    std::uint64_t samples{};
+};
+// Last published GPU mean plus freshness; never interpret an old mean as live.
+DiagnosticTimingReading diagnostic_timing_reading(DiagnosticGpuTiming timing) noexcept;
+
 enum class D3D11ExecutionPath : std::uint32_t {
     waiting,
     dx12_transport,

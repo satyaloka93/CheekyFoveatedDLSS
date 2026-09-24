@@ -79,6 +79,23 @@ inline void afw_mask_include(FoveationMask& mask, FoveationCenter center, float 
 struct AfwMaskExtent {
     float left{1.F}, top{1.F}, right{}, bottom{}, width{}, height{};
 };
+// Donor coverage can contain several eye/gaze samples, but the visible
+// composite must have one boundary, not a union of overlapping ellipses.
+inline FoveationMask afw_single_region(FoveationMask mask) noexcept {
+    if (mask.count < 2) return mask;
+    std::array<float, 4> bounds{};
+    std::copy_n(mask.bounds[0], 4, bounds.begin());
+    for (unsigned i = 1; i < mask.count; ++i) {
+        bounds[0] = (std::min)(bounds[0], mask.bounds[i][0]);
+        bounds[1] = (std::min)(bounds[1], mask.bounds[i][1]);
+        bounds[2] = (std::max)(bounds[2], mask.bounds[i][2]);
+        bounds[3] = (std::max)(bounds[3], mask.bounds[i][3]);
+    }
+    mask = {};
+    mask.count = 1;
+    std::copy_n(bounds.begin(), 4, mask.bounds[0]);
+    return mask;
+}
 inline AfwMaskExtent afw_mask_extent(const FoveationMask& mask, const AfwStereoProjection* projection = nullptr,
     unsigned source = UINT32_MAX) noexcept {
     AfwMaskExtent result;
@@ -166,6 +183,10 @@ inline Settings afw_coverage_settings(Settings settings, const AfwStereoProjecti
                     projection, eye, settings.afw_source_eye);
     }
     if (afw_has_source_projection(settings, projection)) afw_settings_from_mask(settings, *projection);
+    // Allocation above still covers every donor. Fixed-position evaluations
+    // do not visit the gaze coordinator, so finalize their visible mask here
+    // as well. This does not remove borders already baked into AFW history.
+    settings.afw_mask = afw_single_region(settings.afw_mask);
     settings.aligned_height_offset = 0.F;
     settings.eye_independent_coverage = true;
     settings.auto_stereo_alignment = settings.invert_stereo_x_offset = false;

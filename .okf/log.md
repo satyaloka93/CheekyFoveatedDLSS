@@ -1,5 +1,41 @@
 # Change log
 
+## 2026-09-24
+
+* **Publication preparation**: Used the OKF branch and deployment guidance to
+  document the maintained AFW/cost-logging source checkpoint, reconcile the
+  older fork ancestry without restoring superseded code, and distinguish
+  TOW2's latest addon from SHf's preceding build. See the
+  [checkpoint](operations/source-checkpoint-20260924.md). No game deployment
+  or measured-performance claim accompanies this source publication.
+
+## 2026-09-19
+
+* Added [Native cost logging](operations/native-cost-logging.md): existing GPU means now have published sample counts/age; Present logs SR/NR state changes and periodic costs without changing rendering or sampling policy.
+
+* Deployed and hash-verified the tested final-eye SR border addon to TOW2 and
+  SHf with matching shared UEVR backend/PDB. Adjacent backups use stamp
+  `20260919-183537`. Settings/runtime unchanged; headset validation pending.
+
+* Implemented optional final-OpenXR-eye SR border handoff to UEVR-AFW-PUBLISH,
+  with stale-data/projection/size guards and matching raster tests. Both builds
+  and focused AFW/GPU tests passed. Deployment aborted before copying because
+  a game was running. Scene ghosting remains unresolved. See
+  [AFW single region](operations/afw-single-region.md).
+
+* Recorded failed three-oval/ghosting validation and traced the pre-warp border
+  insertion path. Corrected fixed SR/NR mask finalization and stale gaze-mask
+  reuse on gaze-to-fixed transitions; focused regression passed. Follow-up is
+  not deployed and is not claimed as a final-output/ghosting fix. See
+  [AFW single region](operations/afw-single-region.md).
+
+* Added one visible AFW composite region from stereo/raw/filtered donor masks,
+  with exact-hash beta.4 metadata support. Focused AFW tests passed with zero
+  failures; beta.4 accepted and unknown fixture rejected. Broad suite stalled
+  after GPU copy identity testing and was stopped; no full-suite pass claimed.
+  TOW2 peripheral scale changed from 1.0 to 0.75 with backup. See
+  [AFW single region](operations/afw-single-region.md). In-game validation pending.
+
 ## 2026-09-18
 
 * Hardened live AFW/native transitions by invalidating projection and depth-eye

@@ -1595,7 +1595,7 @@ void test_afw_dispatch_and_settings() {
         manual.width = width; manual.height = height;
         manual.x_offset = x; manual.height_offset = y; manual.roundness = 1.F;
         const auto envelope = afw_experiment_settings(manual);
-        expect(envelope.roundness == 1.F && envelope.afw_mask.count == 2 && !uses_coordinated_center(envelope),
+        expect(envelope.roundness == 1.F && envelope.afw_mask.count == 1 && !uses_coordinated_center(envelope),
             "Manual rounded coverage retains two independent eye masks without an eye assignment");
         const float left = (1.F - envelope.width) * .5F;
         const float top = (1.F - envelope.height) * (1.F + envelope.height_offset) * .5F;
@@ -1889,13 +1889,28 @@ void test_afw_gaze_integration() {
     auto preview = settings;
     apply_next_jump_preview(preview, 700);
     expect(preview.next_jump_visible && preview.next_jump_width > 0 && preview.next_jump_height > 0 &&
-        preview.afw_mask.count == 4, "AFW publishes an independently sized jump preview and both raw/filtered eye masks");
+        preview.afw_mask.count == 1, "AFW publishes one visible region despite raw/filtered stereo donor samples");
     const auto preview_crop = crop;
     settings.show_next_jump_target = false;
     fresh(); expect(evaluate() && crop.input_width == preview_crop.input_width && crop.input_height == preview_crop.input_height,
         "Turning off the preview cannot resize current DLSS coverage");
     apply_next_jump_preview(preview = settings, 700);
     expect(!preview.next_jump_visible, "Disabled preview is cleared without disabling rounded coverage");
+    {
+        auto fixed = requested;
+        fixed.center_mode = FoveationCenterMode::fixed;
+        fixed.afw_automatic_coverage = true;
+        fixed = afw_experiment_settings(fixed, &projection);
+        const auto expected = fixed.afw_mask;
+        apply_next_jump_preview(fixed, 700); // This id still has live gaze state.
+        expect(fixed.afw_mask.count == 1 && !fixed.next_jump_visible,
+            "Fixed AFW coverage has one region without a gaze evaluation");
+        for (unsigned corner = 0; corner < 4; ++corner)
+            expect_near(fixed.afw_mask.bounds[0][corner], expected.bounds[0][corner], 1e-6F,
+                "Switching gaze to fixed never revives a stale gaze mask");
+        expect(fixed.afw_nr_mask.count == 1,
+            "Fixed NR coverage is finalized even without a coordinated SR crop");
+    }
     settings.show_next_jump_target = true;
     sample.views[1].flags &= ~CHEEKY_GAZE_VIEW_NEXT_JUMP_VALID;
     fresh(); evaluate(); apply_next_jump_preview(preview = settings, 700);
@@ -1948,7 +1963,8 @@ void test_afw_source_projection_coverage() {
         "Alternating source eyes retain the same private reconstruction allocation");
     expect(std::abs(static_cast<float>(crops[0].input_base_x) - crops[1].input_base_x - 242.513F) <= 8.F,
         "The crop translates by the actual eye projection offset");
-    for (unsigned i = 0; i < 4; ++i) for (unsigned corner = 0; corner < 4; corner += 2) {
+    expect(masks[0].count == 1 && masks[1].count == 1, "Each source eye composites one foveated region");
+    for (unsigned i = 0; i < masks[0].count; ++i) for (unsigned corner = 0; corner < 4; corner += 2) {
         // Independently compare viewing rays, rather than comparing pixel UVs.
         const float left_ray = projection.projections[0].left + masks[0].bounds[i][corner] * 2.F;
         const float right_ray = projection.projections[1].left + masks[1].bounds[i][corner] * 2.F;
@@ -2055,10 +2071,69 @@ void test_afw_gaze_pixel_coverage() {
     }
 }
 
+#include "afw_final_border.hpp"
+
+void test_afw_final_border() {
+    using namespace cheeky::foveated_dlss;
+    reset_gaze_foveation(); allow_afw_stereo_projection(true);
+    float matrices[2][16]{};
+    for (auto& m : matrices) { m[0] = m[5] = m[11] = 1.F; m[14] = .1F; }
+    matrices[0][8] = .2F; matrices[1][8] = -.2F;
+    publish_afw_stereo_projection(matrices, 1000, 800, true);
+    Settings settings;
+    settings.eye_independent_coverage = true; settings.afw_source_eye = 0;
+    settings.alignment_border_enabled = true; settings.roundness = 1;
+    settings.afw_mask.count = 1;
+    const float box[]{.3F,.3F,.7F,.7F};
+    std::copy_n(box, 4, settings.afw_mask.bounds[0]);
+    afw_border_host_time = 0;
+    expect(!afw_final_border_supported(settings), "No host keeps legacy border rendering");
+    float output[5]{};
+    expect(!read_afw_final_border(2,1000,800,output,5), "Invalid eye cannot activate final border sink");
+    read_afw_final_border(0,1000,800,output,5);
+    expect(afw_final_border_supported(settings), "Matching live host accepts final border routing");
+    publish_afw_final_border(settings);
+    expect(read_afw_final_border(0,1000,800,output,5) == 1, "Current border is readable");
+    expect_near(output[0],box[0],1e-5F,"Source eye outline is preserved");
+    expect(read_afw_final_border(1,1000,800,output,5) == 1, "Other eye has projected outline");
+    const auto projection = afw_stereo_projection();
+    const auto expected = afw_project_between_eyes({box[0],box[1],1},projection.projections[0],projection.projections[1]);
+    expect_near(output[0],expected.u,1e-5F,"Other eye uses projection, not identical UV");
+    { std::lock_guard lock(afw_border_mutex); afw_final_border.time = GetTickCount64() - 101; }
+    expect(!read_afw_final_border(0,1000,800,output,5), "Expired border is not displayed");
+    settings.alignment_border_enabled = false; publish_afw_final_border(settings);
+    expect(!read_afw_final_border(0,1000,800,output,5), "Disabling border clears published data");
+    read_afw_final_border(0,999,800,output,5);
+    expect(!afw_final_border_supported(settings), "Mismatched final eye extent cannot suppress legacy border");
+    afw_border_host_time = 0;
+    allow_afw_stereo_projection(false); reset_gaze_foveation();
+}
+
 int run_d3d12_history_tests();
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "--cost-diagnostics") == 0) {
+        using namespace cheeky::foveated_dlss;
+        const auto kind = DiagnosticGpuTiming::d3d12_native_dlss;
+        auto reading = diagnostic_timing_reading(kind);
+        expect(reading.samples == 0 && reading.age_ms == -1, "Missing GPU sample must be explicitly unavailable");
+        diagnostic_note_d3d12_dlss_gpu_time(2.0f, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(270));
+        diagnostic_note_d3d12_dlss_gpu_time(4.0f, false);
+        reading = diagnostic_timing_reading(kind);
+        expect(reading.samples == 2 && std::abs(reading.mean_ms - 3.0) < 0.0001 && reading.age_ms >= 0,
+            "Published GPU mean, count and freshness agree");
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        const auto stale = diagnostic_timing_reading(kind);
+        expect(stale.samples == reading.samples && stale.age_ms > reading.age_ms,
+            "Without new samples old results age rather than becoming current");
+        expect(diagnostic_timing_reading(DiagnosticGpuTiming::count).age_ms == -1,
+            "Invalid metric is unavailable");
+        std::cout << "GPU cost diagnostics failures=" << failures << '\n';
+        return failures ? 1 : 0;
+    }
     if (argc == 2 && std::strcmp(argv[1], "--afw-core") == 0) {
+        test_afw_final_border();
         test_afw_dispatch_and_settings();
         test_afw_projection_and_metadata();
         test_afw_gaze_integration();

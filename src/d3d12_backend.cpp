@@ -1,4 +1,5 @@
 #include "backend.hpp"
+#include "afw_final_border.hpp"
 #include "d3d12_output_contract.hpp"
 #include "d3d12_composite_shader.hpp"
 #include "diagnostics.hpp"
@@ -20,6 +21,11 @@
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+
+extern "C" __declspec(dllexport) unsigned __cdecl CheekyAFWBorderV1(
+    unsigned eye, unsigned width, unsigned height, float* bounds, unsigned count) noexcept {
+    return cheeky::foveated_dlss::read_afw_final_border(eye, width, height, bounds, count);
+}
 
 namespace cheeky::foveated_dlss {
 namespace {
@@ -718,6 +724,8 @@ struct D3D12Evaluation {
     float roundness{};
     float feather{};
     bool alignment_border{};
+    Settings final_border_settings{};
+    bool final_border_supported{};
     bool next_jump_visible{};
     float next_jump_offset_x{}, next_jump_offset_y{};
     float next_jump_width{}, next_jump_height{};
@@ -1029,7 +1037,9 @@ D3D12Evaluation* prepare_d3d12(
     evaluation->shape_offset_y = effective_settings.height_offset;
     evaluation->roundness = effective_settings.roundness;
     evaluation->feather = effective_settings.transition_width;
-    evaluation->alignment_border = effective_settings.alignment_border_enabled;
+    evaluation->final_border_settings = effective_settings;
+    evaluation->final_border_supported = afw_final_border_supported(effective_settings);
+    evaluation->alignment_border = effective_settings.alignment_border_enabled && !evaluation->final_border_supported;
     evaluation->next_jump_visible = effective_settings.next_jump_visible;
     evaluation->next_jump_offset_x = effective_settings.next_jump_offset_x;
     evaluation->next_jump_offset_y = effective_settings.next_jump_offset_y;
@@ -1228,7 +1238,9 @@ D3D12Evaluation* prepare_d3d12_streamline(
     evaluation->shape_offset_y = effective_settings.height_offset;
     evaluation->roundness = effective_settings.roundness;
     evaluation->feather = effective_settings.transition_width;
-    evaluation->alignment_border = effective_settings.alignment_border_enabled;
+    evaluation->final_border_settings = effective_settings;
+    evaluation->final_border_supported = afw_final_border_supported(effective_settings);
+    evaluation->alignment_border = effective_settings.alignment_border_enabled && !evaluation->final_border_supported;
     evaluation->next_jump_visible = effective_settings.next_jump_visible;
     evaluation->next_jump_offset_x = effective_settings.next_jump_offset_x;
     evaluation->next_jump_offset_y = effective_settings.next_jump_offset_y;
@@ -1401,6 +1413,8 @@ void finish_d3d12(
     }
 
     if (command_list != nullptr && ngx_succeeded(result)) {
+        if (evaluation->final_border_supported)
+            publish_afw_final_border(evaluation->final_border_settings);
         auto* const resources = evaluation->resources;
         if (evaluation->diagnostic_trace) {
             trace_event(

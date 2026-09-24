@@ -985,11 +985,17 @@ bool calculate_coordinated_center(
 
 void apply_next_jump_preview(Settings& settings, const DlssViewId view_id) noexcept {
     settings.next_jump_visible = false;
+    if (settings.eye_independent_coverage && settings.center_mode == FoveationCenterMode::fixed) {
+        // NR can call this even when fixed SR bypasses the coordinator. Never
+        // revive a previous gaze mask retained under the same native view id.
+        settings.afw_mask = afw_single_region(settings.afw_mask);
+        return;
+    }
     const bool preview = settings.show_next_jump_target && settings.center_mode == FoveationCenterMode::simulated_gaze;
     if (!preview && !settings.eye_independent_coverage) return;
     std::lock_guard lock(coordinator_mutex);
     for (const auto& state : view_states) if (state.view_id == view_id) {
-        if (settings.eye_independent_coverage) settings.afw_mask = state.afw_mask;
+        if (settings.eye_independent_coverage) settings.afw_mask = afw_single_region(state.afw_mask);
         settings.next_jump_visible = preview && state.next_jump_visible;
         settings.next_jump_offset_x = state.next_jump_offsets.x;
         settings.next_jump_offset_y = state.next_jump_offsets.y;

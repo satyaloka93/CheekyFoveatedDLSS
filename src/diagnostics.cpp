@@ -68,6 +68,9 @@ struct GpuTimingAccumulator {
     std::int64_t window_start_ns{};
     double sum_ms{};
     std::uint32_t sample_count{};
+    std::uint64_t published_samples{};
+    std::int64_t published_ns{};
+    double published_mean_ms{};
 };
 
 std::array<
@@ -129,6 +132,9 @@ void note_averaged_gpu_time(
     std::uint32_t bits{};
     std::memcpy(&bits, &average, sizeof(bits));
     destination.store(bits, std::memory_order_release);
+    accumulator.published_samples += accumulator.sample_count;
+    accumulator.published_ns = now;
+    accumulator.published_mean_ms = average;
     accumulator.window_start_ns = now;
     accumulator.sum_ms = 0.0;
     accumulator.sample_count = 0U;
@@ -144,6 +150,16 @@ void note_averaged_gpu_time(
 }
 
 }  // namespace
+
+DiagnosticTimingReading diagnostic_timing_reading(const DiagnosticGpuTiming timing) noexcept {
+    const auto index = timing_index(timing);
+    if (index >= timing_accumulators.size()) return {};
+    auto& accumulator = timing_accumulators[index];
+    std::lock_guard lock(accumulator.mutex);
+    return {accumulator.published_mean_ms,
+        accumulator.published_ns ? (steady_now_ns() - accumulator.published_ns) / 1000000.0 : -1.0,
+        accumulator.published_samples};
+}
 
 void diagnostic_note_hook(const DiagnosticApi api) noexcept {
     for_api(api).hook_discovered.store(true, std::memory_order_release);

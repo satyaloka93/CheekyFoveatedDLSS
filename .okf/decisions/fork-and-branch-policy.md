@@ -3,7 +3,7 @@ type: decision
 title: Fork and branch policy
 description: One branch, nothing unverified reaches a remote, no automatic pushes.
 tags: [git, policy, upstream]
-timestamp: 2026-09-07
+timestamp: 2026-09-24
 ---
 
 # Fork and branch policy
@@ -30,7 +30,13 @@ Standing instructions from the repository owner. These override default agent be
 5. **No upstream PR** until the owner says so, and not before the
    [GTA regression check](../titles/gta-san-andreas-tde.md) passes.
 
-## Current state — 2026-09-07
+## Current publication checkpoint
+
+See the [September 24 checkpoint](../operations/source-checkpoint-20260924.md)
+for the consolidated source, older fork-history reconciliation, deployed
+binary differences and test limitations. The state below is historical.
+
+## Historical state — 2026-09-07
 
 Branch `fixes`, ahead of `origin/master` by 2:
 

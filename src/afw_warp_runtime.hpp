@@ -13,7 +13,7 @@ inline bool known_afw_warp_file(const wchar_t* path) noexcept {
         nullptr, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, nullptr);
     if (file == INVALID_HANDLE_VALUE) return false;
     LARGE_INTEGER size{};
-    if (!GetFileSizeEx(file, &size) || size.QuadPart != 565248) { CloseHandle(file); return false; }
+    if (!GetFileSizeEx(file, &size) || (size.QuadPart != 565248 && size.QuadPart != 565760)) { CloseHandle(file); return false; }
     BCRYPT_ALG_HANDLE algorithm{};
     BCRYPT_HASH_HANDLE hash{};
     bool ok = BCryptOpenAlgorithmProvider(&algorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0;
@@ -33,7 +33,12 @@ inline bool known_afw_warp_file(const wchar_t* path) noexcept {
     constexpr std::array<unsigned char, 32> expected{
         0x5f,0x3c,0xfc,0x38,0x90,0x3a,0xc4,0x38,0x24,0x1a,0x3c,0x47,0xcb,0x4b,0xc3,0xac,
         0x32,0x9c,0xb3,0x9b,0x05,0x6e,0x33,0xa6,0x3c,0x20,0x04,0x5f,0xe1,0x53,0x36,0xf9};
-    return ok && digest == expected;
+    // Official beta.4: WarpPrefix and framebuffer/texture prefixes match the
+    // decoded fields above. Later appended shader options are never read here.
+    constexpr std::array<unsigned char, 32> beta4{
+        0x76,0xbb,0xc4,0xd7,0xa5,0x37,0x0b,0xa0,0xd6,0xa1,0xa5,0x0d,0xe6,0xb8,0x1d,0x45,
+        0x22,0x3e,0x42,0xb7,0x64,0xd2,0xd7,0xc7,0x9f,0x0c,0x6c,0x48,0xa5,0x9f,0x6b,0x64};
+    return ok && (digest == expected || digest == beta4);
 }
 inline bool known_afw_warp_runtime(HMODULE module) noexcept {
     if (!module) return false;
