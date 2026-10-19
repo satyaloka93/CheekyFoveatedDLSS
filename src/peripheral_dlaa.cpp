@@ -5,6 +5,7 @@
 #include "motion_region.hpp"
 #include "rr_contract.hpp"
 #include "peripheral_recovery.hpp"
+#include "ngx_parameter_overlay.hpp"
 
 #include "runtime.hpp"
 
@@ -91,6 +92,8 @@ struct PeripheralViewState {
     std::uint32_t render_height{};
     std::uint32_t working_width{};
     std::uint32_t working_height{};
+    std::uint32_t output_width{}, output_height{};
+    bool super_resolution{};
     DXGI_FORMAT color_format{DXGI_FORMAT_UNKNOWN};
     DXGI_FORMAT depth_format{DXGI_FORMAT_UNKNOWN};
     DXGI_FORMAT output_format{DXGI_FORMAT_UNKNOWN};
@@ -319,6 +322,10 @@ void release_state(PeripheralViewState& state) noexcept {
         request.render_height,
         request.scale
     );
+    const bool super_resolution = peripheral_uses_sr(request.method, request.feature_id) &&
+        (dimensions.width < request.render_width || dimensions.height < request.render_height);
+    const auto target_width = super_resolution ? request.render_width : dimensions.width;
+    const auto target_height = super_resolution ? request.render_height : dimensions.height;
     const auto color_format = typed_resource_format(color_desc.Format);
     const auto depth_format = depth_srv_format(depth_desc.Format);
     const auto motion_format = typed_resource_format(motion_desc.Format);
@@ -331,6 +338,8 @@ void release_state(PeripheralViewState& state) noexcept {
             state.render_height == request.render_height &&
             state.working_width == dimensions.width &&
             state.working_height == dimensions.height &&
+            state.output_width == target_width && state.output_height == target_height &&
+            state.super_resolution == super_resolution &&
             state.color_format == color_format &&
             state.depth_format == depth_format &&
             state.output_format == output_desc.Format &&
@@ -363,6 +372,12 @@ void release_state(PeripheralViewState& state) noexcept {
         state.render_height = request.render_height;
         state.working_width = dimensions.width;
         state.working_height = dimensions.height;
+        state.output_width = target_width;
+        state.output_height = target_height;
+        state.super_resolution = super_resolution;
+        trace_event("PERIPHERAL METHOD view=%llu method=%s input=%ux%u output=%ux%u",
+            static_cast<unsigned long long>(request.view_id), super_resolution ? "DLSS-SR" : "DLAA",
+            dimensions.width, dimensions.height, target_width, target_height);
         state.color_format = color_format;
         state.depth_format = depth_format;
         state.output_format = output_desc.Format;
@@ -379,6 +394,12 @@ void release_state(PeripheralViewState& state) noexcept {
     state.render_height = request.render_height;
     state.working_width = dimensions.width;
     state.working_height = dimensions.height;
+    state.output_width = target_width;
+    state.output_height = target_height;
+    state.super_resolution = super_resolution;
+    trace_event("PERIPHERAL METHOD view=%llu method=%s input=%ux%u output=%ux%u",
+        static_cast<unsigned long long>(request.view_id), super_resolution ? "DLSS-SR" : "DLAA",
+        dimensions.width, dimensions.height, target_width, target_height);
     state.color_format = color_format;
     state.depth_format = depth_format;
     state.output_format = output_desc.Format;
@@ -397,8 +418,8 @@ void release_state(PeripheralViewState& state) noexcept {
     if (request.output_override != nullptr) {
         const auto desc = request.output_override->GetDesc();
         return desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
-            desc.Width == state.working_width &&
-            desc.Height == state.working_height;
+            desc.Width == state.output_width &&
+            desc.Height == state.output_height;
     }
     if (state.output != nullptr) return true;
     if (request.output_template == nullptr) return false;
@@ -406,8 +427,8 @@ void release_state(PeripheralViewState& state) noexcept {
     if (!create_texture(
             state.device,
             desc,
-            state.working_width,
-            state.working_height,
+            state.output_width,
+            state.output_height,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             &state.output,
             state.output_format
@@ -717,6 +738,8 @@ bool prepare_peripheral_dlaa_resources(
 
     resources.working_width = state->working_width;
     resources.working_height = state->working_height;
+    resources.output_width = state->output_width;
+    resources.output_height = state->output_height;
     resources.output = request.output_override != nullptr
         ? request.output_override
         : state->output;
@@ -808,11 +831,17 @@ bool prepare_peripheral_dlaa_resources(
 }
 
 bool evaluate_peripheral_dlaa_ngx(
-    const PeripheralDlaaRequest& request,
+    const PeripheralDlaaRequest& source_request,
     PeripheralDlaaResources& resources,
     NgxResult& result,
     D3D12BackendTiming* const timing
 ) noexcept {
+    // A missing game preset cannot be restored by writing zero: that creates
+    // a new key. Keep all experimental SR overrides in a private overlay.
+    auto request = source_request;
+    NgxParameterOverlay private_parameters(source_request.parameters);
+    if (peripheral_uses_sr(request.method, request.feature_id) && request.parameters)
+        request.parameters = &private_parameters;
     const auto completed = [&](bool success) {
         std::lock_guard lock(state_mutex);
         for (auto& state : states) if (state.view_id == request.view_id) {
@@ -835,8 +864,8 @@ bool evaluate_peripheral_dlaa_ngx(
     contract.feature_id = request.feature_id;
     contract.render_width = resources.working_width;
     contract.render_height = resources.working_height;
-    contract.output_width = resources.working_width;
-    contract.output_height = resources.working_height;
+    contract.output_width = resources.output_width;
+    contract.output_height = resources.output_height;
     contract.color_base_x = resources.color_base_x;
     contract.color_base_y = resources.color_base_y;
     contract.depth_base_x = resources.depth_base_x;
@@ -847,7 +876,9 @@ bool evaluate_peripheral_dlaa_ngx(
     contract.depth_inverted = request.depth_inverted;
     contract.reset = request.reset;
     contract.create_flags = request.create_flags | dlss_feature_flag_mv_low_res;
-    contract.perf_quality = perf_quality_dlaa;
+    const bool super_resolution = resources.output_width != resources.working_width ||
+        resources.output_height != resources.working_height;
+    contract.perf_quality = super_resolution ? 2U : perf_quality_dlaa; // MaxQuality / custom input extent
 
     D3D12DlssInputs inputs{};
     inputs.color = resources.color;
@@ -868,15 +899,16 @@ bool evaluate_peripheral_dlaa_ngx(
         resources.working_height,
         0U,
         0U,
-        resources.working_width,
-        resources.working_height,
+        resources.output_width,
+        resources.output_height,
     };
 
     const auto saved_quality = get_ngx_integer_bits(
         request.parameters,
         "PerfQualityValue"
     );
-    const auto* preset_name = request.feature_id == 13U ? rr_presets[0] : "DLSS.Hint.Render.Preset.DLAA";
+    const auto* preset_name = request.feature_id == 13U ? rr_presets[0] :
+        (super_resolution ? "DLSS.Hint.Render.Preset.Quality" : "DLSS.Hint.Render.Preset.DLAA");
     const auto saved_preset = get_ngx_integer_bits(request.parameters, preset_name);
     const auto saved_flags = get_ngx_integer_bits(
         request.parameters,
@@ -931,7 +963,7 @@ bool evaluate_peripheral_dlaa_ngx(
             static_cast<float>(request.render_height)
         : 1.0F;
 
-    request.parameters->Set("PerfQualityValue", perf_quality_dlaa);
+    request.parameters->Set("PerfQualityValue", contract.perf_quality);
     if (request.preset) request.parameters->Set(preset_name, request.preset);
     request.parameters->Set(
         "DLSS.Feature.Create.Flags",

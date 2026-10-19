@@ -33,6 +33,7 @@
 #include <mutex>
 #include <utility>
 #include "nr_pipeline_capture.inl"
+#include "nr_vit_reuse.inl"
 
 namespace cheeky::foveated_dlss {
 namespace {
@@ -280,6 +281,7 @@ void evict_retired_features(ViewState& view) noexcept {
         return false;
     }
 
+    nr_vit::initialize();
     const auto module=load_nr_runtime_module();
     diagnostics.runtime_path = module.path;
     diagnostics.runtime_version = module.version;
@@ -1065,6 +1067,16 @@ static Settings nr_settings_for_extra_pass(const Settings& base, const unsigned 
 #undef COPY3
     }
 #undef COPY_PASS_FIELD
+    // One set of strength controls for every sequential pass. Keep the old
+    // per-pass configuration fields readable for rollback, but do not let
+    // their stale values override the shared controls at evaluation time.
+    out.nr_intensity = base.nr_intensity;
+    out.nr_local_tone_strength = base.nr_local_tone_strength;
+    out.nr_local_structure_strength = base.nr_local_structure_strength;
+    out.nr_skin_structure_strength = base.nr_skin_structure_strength;
+    out.nr_hdr_transfer_strength = base.nr_hdr_transfer_strength;
+    out.nr_color_strength = base.nr_color_strength;
+    apply_shared_nr_normalization(out, base);
     return out;
 }
 
@@ -1081,6 +1093,11 @@ bool evaluate_dlss_nr_internal(
     std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(nr_mutex);
     collect_retired_views();
+    if (allow_second_pass) {
+        diagnostics.exposure_source = "Waiting for compatible NR input";
+        diagnostics.exposure_multiplier = settings.nr_exposure_multiplier;
+        diagnostics.exposure_view = frame.view_id;
+    }
     diagnostics.skip_reason = nullptr;
     diagnostics.route = frame.route;
     diagnostics.hdr_input = (frame.create_flags & 1U) != 0U;
@@ -1206,6 +1223,14 @@ bool evaluate_dlss_nr_internal(
         settings.nr_color_pipeline != 0U && settings.nr_exposure_mode != 0U
     );
     if (gpu == nullptr) return false;
+    if (allow_second_pass) {
+        const char* reason = "accepted";
+        if (settings.nr_color_pipeline && settings.nr_exposure_mode)
+            static_cast<void>(supported_exposure(frame, &reason));
+        diagnostics.exposure_source = !settings.nr_color_pipeline ? "Legacy pipeline (bridge exposure unused)" :
+            !settings.nr_exposure_mode ? "Texture exposure off; manual multiplier only" :
+            gpu->exposure_texture ? "Game exposure texture bound (GPU validates texel)" : reason;
+    }
     const auto depth_x = frame.color_is_region
         ? ScaledSubrect{frame.depth_base_x, frame.depth_width}
         : scale_subrect(
@@ -1423,12 +1448,16 @@ bool evaluate_dlss_nr_internal(
     parameters->Set("DLSSNR.Upscaling", 0U);
     set_model_tuning(parameters, settings);
 
-    const auto result = runtime.evaluate_feature(
-        frame.command_list,
-        view.handle,
-        parameters,
-        nullptr
-    );
+    const auto result = [&] {
+        nr_vit::Scope reuse(settings.nr_vit_reuse && frame.route != DlssNrRoute::d3d11_transport,
+            diagnostics.runtime_version.data(), runtime.device, frame.command_list, frame.view_id, reset);
+        auto evaluated=runtime.evaluate_feature(frame.command_list, view.handle, parameters, nullptr);
+        if(reuse.finish()!=0)evaluated=0xBAD00001U;
+        if(!ngx_succeeded(evaluated)) {
+            auto& state=nr_vit::state();std::lock_guard lock(state.mutex);nr_vit::invalidate(state);
+        }
+        return evaluated;
+    }();
     diagnostics.last_result = result;
     diagnostics.output_width = frame.output_width;
     diagnostics.output_height = frame.output_height;

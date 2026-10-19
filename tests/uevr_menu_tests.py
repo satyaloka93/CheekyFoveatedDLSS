@@ -24,6 +24,7 @@ assert 'corrections' in baseline['eye_calibration']
 assert baseline['settings']['NrProcessingOrder'] in (0, 1)
 assert baseline['setting_groups']['NrProcessingOrder'] == 'nr'
 assert {'processing_order', 'processing_width', 'processing_height', 'skip_reason'} <= baseline['nr_details'].keys()
+assert {'exposure_source', 'exposure_multiplier', 'exposure_view'} <= baseline['nr_details'].keys()
 for api in baseline['apis']:
     assert {'before_nr_full_ms', 'before_nr_foveated_ms', 'before_pipeline_ms',
             'after_pipeline_ms', 'nr_full_ms', 'nr_foveated_ms'} <= api.keys()
@@ -497,8 +498,11 @@ def run(engine):
     for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain", "NR exposure texture"):
         assert set(g.combos[label].keys()) == {0, 1, 2}, label
     assert g.combos["NR color pipeline"][0] == "Legacy"
-    assert g.slider_ranges["NR exposure multiplier"][1] == 0.01
-    assert g.slider_ranges["NR exposure multiplier"][2] == 10
+    assert g.slider_ranges["Model-input exposure multiplier (all passes)"][1] == 0.01
+    assert g.slider_ranges["Model-input exposure multiplier (all passes)"][2] == 10
+    for section in ("Input normalization - all passes", "Model detail and tone - all passes", "Compatibility - depth and motion"):
+        assert g.trees[section], "Missing grouped NR settings: " + section
+    assert not g.trees["Advanced NR"], "Do not bury output blend in the old advanced group"
     state["nr_details"].update(runtime_version="310.9.16.0", runtime_path="C:\\NR test\\nvngx_dlssnr.dll")
     receive(state)
     draw()
@@ -514,11 +518,41 @@ def run(engine):
     state["nr_details"]["hdr_input"] = False
     receive(state)
     draw()
-    assert g["values"]["Paper white"] is None, "SDR has no paper-white conversion"
+    assert g["values"]["NR reference white (100-nit units)"] is not None, "Bridge reference white also applies to SDR"
     state["nr_details"]["hdr_input"] = True
     receive(state)
     draw()
-    assert g["values"]["Paper white"] is not None, "HDR must expose paper-white conversion"
+    assert g["values"]["NR reference white (100-nit units)"] is not None, "HDR must expose reference white"
+    # Bridge UI combines legacy factors without changing them just by drawing.
+    saved_blend = {k: state["settings"][k] for k in ("NrColorPipeline", "NrHdrTransferStrength", "NrColorStrength")}
+    state["settings"].update(NrColorPipeline=1, NrHdrTransferStrength=1.75, NrColorStrength=0.06)
+    receive(state)
+    count = len(g.sent)
+    draw()
+    assert abs(g["values"]["NR output blend"] - 10.5) < 0.001
+    assert len(g.sent) == count
+    assert g["values"]["Legacy HDR transfer strength"] is None
+    for percent, transfer, correction in ((0, 1, 0), (50, 1, 0.5), (100, 1, 1), (350, 2, 1.75)):
+        draw(changes={"NR output blend": percent})
+        values = dict(line.split("=", 1) for line in last().splitlines()[3:])
+        assert float(values["NrHdrTransferStrength"]) == transfer
+        assert float(values["NrColorStrength"]) == correction
+        state["request"] = state["applied_request"] = int(last().splitlines()[1])
+        state["settings"].update(NrHdrTransferStrength=transfer, NrColorStrength=correction)
+        receive(state)
+    draw(click="Full NR output (100%)")
+    values = dict(line.split("=", 1) for line in last().splitlines()[3:])
+    assert float(values["NrHdrTransferStrength"]) == float(values["NrColorStrength"]) == 1
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"].update(NrHdrTransferStrength=1, NrColorStrength=1)
+    receive(state)
+    state["settings"]["NrColorPipeline"] = 0
+    receive(state)
+    draw()
+    assert g["values"]["NR output blend"] is None
+    assert g["values"]["Legacy HDR transfer strength"] == 1
+    state["settings"].update(saved_blend)
+    receive(state)
     state["settings"]["NrAutomaticMask"] = True
     receive(state)
     draw()
@@ -547,7 +581,7 @@ def run(engine):
     assert len(g.sent) == count, "Clicking selected appearance must not deselect or resend"
     help_text = " ".join(g.drawn.values())
     assert "Model C: RenoDX appearance C" in help_text
-    assert "not speed or quality rankings" in help_text
+    assert "not speed or quality levels" in help_text
     assert "Version-specific: 310.8.0 had one network" in help_text
     assert "Patched DLL behavior is not verified here" in help_text
     # Rendering order follows the same immediate apply and acknowledgement
@@ -705,7 +739,7 @@ def run(engine):
     state["request"] = state["applied_request"] = int(last().splitlines()[1])
     state["settings"]["NrThirdPass"] = True
     receive(state)
-    draw(changes={"Intensity##NrPass2": 0.42})
+    draw(changes={"NR intensity": 0.42})
     for pass_number in (2, 3):
         for i, letter in enumerate("ABC"):
             assert any(f"Model {letter}##NrPass{pass_number}Style_{i}" in t for t in g.drawn.values())
@@ -714,17 +748,19 @@ def run(engine):
         assert set(g.combos[f"NR reconstruction##NrPass{pass_number}"].keys()) == {0, 1}
         assert set(g.combos[f"NR downsample filter##NrPass{pass_number}"].keys()) == {0, 1}
         assert set(g.combos[f"NR upsample filter##NrPass{pass_number}"].keys()) == {0, 1, 2}
-        for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain", "NR exposure texture"):
+        for label in ("NR color pipeline", "NR signal encoding", "NR scaling domain"):
             assert set(g.combos[f"{label}##NrPass{pass_number}"].keys()) == {0, 1, 2}
-        assert g.slider_ranges[f"NR exposure multiplier##NrPass{pass_number}"][1] == 0.01
-        assert g.slider_ranges[f"NR exposure multiplier##NrPass{pass_number}"][2] == 10
-    assert "NrPass2Intensity=0.42" in last() and "NrPass3Intensity=" not in last()
+        assert g["values"][f"NR exposure multiplier##NrPass{pass_number}"] is None
+        assert g.slider_ranges["Model-input exposure multiplier (all passes)"][1] == 0.01
+        assert g.slider_ranges["Model-input exposure multiplier (all passes)"][2] == 10
+    assert "NrIntensity=0.42" in last() and "NrPass2Intensity=" not in last() and "NrPass3Intensity=" not in last()
     state["request"] = state["applied_request"] = int(last().splitlines()[1])
-    state["settings"]["NrPass2Intensity"] = 0.42
+    state["settings"]["NrIntensity"] = 0.42
     receive(state)
     draw()
-    assert g["values"]["Intensity##NrPass2"] == 0.42
-    assert g["values"]["Intensity##NrPass3"] == state["settings"]["NrPass3Intensity"]
+    assert g["values"]["NR intensity"] == 0.42
+    assert g["values"]["Intensity##NrPass2"] is None
+    assert g["values"]["Intensity##NrPass3"] is None
     draw(changes={"Second DLSS 5 pass": False})
     assert "NrSecondPass=false" in last() and "NrThirdPass=false" in last()
     assert g["values"]["Third DLSS 5 pass"] is None

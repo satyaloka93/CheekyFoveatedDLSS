@@ -275,6 +275,14 @@ void set_overlay_framebuffer_scale(unsigned width, unsigned height) {
 
 void poll_overlay_hotkey(InputState& input) {
     if (input.rebinding) return;
+#ifdef CHEEKY_OVERLAY_TEST_DESKTOP
+    const bool shot = cheeky_overlay_test_key_down(VK_CONTROL) && cheeky_overlay_test_key_down(VK_SHIFT) && cheeky_overlay_test_key_down(VK_F6);
+#else
+    const bool shot = (physical_key_state(VK_CONTROL) & 0x8000) &&
+        (physical_key_state(VK_SHIFT) & 0x8000) && (physical_key_state(VK_F6) & 0x8000);
+#endif
+    const bool shot_was_down = input.screenshot_down.exchange(shot);
+    if (shot && !shot_was_down && input.enabled && foreground(input.window)) input.screenshot_requested=true;
     const auto key = input.menu_key.load();
 #ifdef CHEEKY_OVERLAY_TEST_DESKTOP
     const bool down = cheeky_overlay_test_key_down(key);

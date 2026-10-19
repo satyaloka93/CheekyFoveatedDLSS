@@ -165,6 +165,26 @@ local function combo(label, key, values)
     local changed, value = imgui.combo(label, draft[key], values)
     if changed then draft[key], dirty[key], ready_edits[key] = value, value, value end
 end
+local function nr_output_blend()
+    local transfer, correction = "NrHdrTransferStrength", "NrColorStrength"
+    local percent = 100 * (draft[transfer] or 1) * (draft[correction] or 1)
+    local changed, value = imgui.slider_float("NR output blend", percent, 0, 400, "%.1f%%")
+    local active = imgui.is_item_active()
+    if imgui.button("Full NR output (100%)") then changed, value, active = true, 100, false end
+    if changed then
+        local blend = math.max(0, math.min(value, 400)) / 100
+        local factor = blend > 2 and 2 or 1
+        for key, v in pairs({[transfer]=factor, [correction]=blend/factor}) do
+            draft[key], dirty[key], slider_edits[key], ready_edits[key] = v, v, true, nil
+        end
+    end
+    -- Send both underlying values together, only after releasing the slider.
+    if not active and (slider_edits[transfer] or slider_edits[correction]) then
+        for _, key in ipairs({transfer, correction}) do
+            ready_edits[key], slider_edits[key] = draft[key], nil
+        end
+    end
+end
 local function text(s) imgui.text(tostring(s)) end
 local function nr_choice(label, key, names)
     if status.settings[key] == nil then return end
@@ -203,7 +223,7 @@ local function appearance_help(value)
         [2] = "Model C: RenoDX appearance C (Style=2; formerly Cinematic). Not a newer network generation.",
     }
     selection_help(descriptions[value] or descriptions[0])
-    selection_help("Changes neural conditioning and associated grading. A/B/C are not speed or quality rankings.")
+    selection_help("Choose the look you prefer. A/B/C are not speed or quality levels.")
 end
 local function extra_nr_pass(pass)
     local prefix = "NrPass" .. pass
@@ -227,24 +247,14 @@ local function extra_nr_pass(pass)
     choice("NR color pipeline", "ColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})
     choice("NR signal encoding", "SignalEncoding", {[0]="sRGB",[1]="PQ SDR",[2]="Linear SDR"})
     choice("NR scaling domain", "ScalingDomain", {[0]="sRGB",[1]="PQ",[2]="Linear"})
-    choice("NR exposure texture", "ExposureMode", {[0]="Off",[1]="Multiply",[2]="Divide"})
-    -- Exposure multiplier is optional for compatibility with older runtimes.
-    if status.settings[prefix .. "ExposureMultiplier"] ~= nil then
-        slider("NR exposure multiplier##" .. prefix, prefix .. "ExposureMultiplier", 0.01, 10)
-    end
+    text("Exposure mode and model-input brightness use the shared controls above, along with reference white.")
     choice("NR downsample filter", "DownsampleFilter", {[0]="Bilinear (default)",[1]="Area (experimental)"})
     choice("NR upsample filter", "UpsampleFilter", {[0]="Bilinear (default)",[1]="Bicubic clamped (experimental)",[2]="RenoDX-style cubic (unclamped)"})
     text("Unclamped cubic may ring/overshoot; compare at reduced NR working scale.")
-    scale("Intensity", "Intensity", 0, 1)
+    text("All passes use the shared intensity, tone, structure, skin strength, reference white and output blend above.")
     if imgui.tree_node("Advanced neural rendering" .. id) then
-        scale("Local tone", "LocalToneStrength", 0, 2)
-        scale("Local structure", "LocalStructureStrength", 0, 2)
         toggle("Automatic mask", "AutomaticMask")
-        if draft[prefix .. "AutomaticMask"] then scale("Skin structure", "SkinStructureStrength", 0, 2) end
         toggle("UI correction", "UiCorrection")
-        scale("Paper white", "PaperWhiteScale", 0.01, 8)
-        scale("Transfer strength", "HdrTransferStrength", 0, 2)
-        scale("Color strength", "ColorStrength", 0, 2)
         choice("Depth convention", "DepthConvention", {[0]="Game/default",[1]="Normal",[2]="Reversed"})
         scale("Motion scale X", "MotionScaleXMultiplier", -4, 4)
         scale("Motion scale Y", "MotionScaleYMultiplier", -4, 4)
@@ -558,11 +568,15 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             slider("Transition width", "TransitionWidth", 0, 0.3)
             check("Show red alignment border", "AlignmentBorder")
             section("Periphery")
-            check("Peripheral DLAA", "PeripheralDlaa")
+            check("Peripheral processing", "PeripheralDlaa")
             if draft.PeripheralDlaa then
+                if not rr then
+                    combo("Peripheral method", "PeripheralMethod", {[0]="Scaled DLAA (existing)",[1]="DLSS SR (experimental, native DX12)"})
+                    text("SR reconstructs scaled input to game render resolution. May cost more; compare peripheral GPU time. Scale 1 uses DLAA. DX11/Vulkan retain DLAA.")
+                end
                 if rr then combo("Peripheral RR preset", "RrPeripheralPreset", {[0]="Game/default",[4]="D",[5]="E",[6]="F"})
                 else combo("Peripheral preset", "PeripheralDlaaPreset", {[5]="E",[10]="J",[11]="K",[12]="L",[13]="M"}) end
-                slider("Periphery scale", "PeripheralDlaaScale", 0.2, 1)
+                slider("Periphery input scale", "PeripheralDlaaScale", 0.2, 1)
             end
         end
         reset_group("Reset DLSS-SR defaults", "sr")
@@ -573,6 +587,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
         local nr = status.nr_details or {}
         text("NR runtime state: " .. tostring(status.nr or "Unavailable"))
         text("NR DLL version: " .. ((nr.runtime_version and nr.runtime_version ~= "") and nr.runtime_version or "Not reported yet"))
+        text("Exposure source (last primary view): " .. (nr.exposure_source or "Not reported yet"))
         text("NR DLL path: " .. ((nr.runtime_path and nr.runtime_path ~= "") and nr.runtime_path or "Not reported yet"))
         text("Identity appears after NR loads; it does not confirm successful evaluations.")
         if status.renderer == 0 then
@@ -633,24 +648,43 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     combo("NR color pipeline", "NrColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})
                     combo("NR signal encoding", "NrSignalEncoding", {[0]="sRGB",[1]="PQ SDR",[2]="Linear SDR"})
                     combo("NR scaling domain", "NrScalingDomain", {[0]="sRGB",[1]="PQ",[2]="Linear"})
-                    combo("NR exposure texture", "NrExposureMode", {[0]="Off",[1]="Multiply",[2]="Divide"})
-                    slider("NR exposure multiplier", "NrExposureMultiplier", 0.01, 10)
                     text("Bridge modes: native DLSS linear BT.709 or explicit sRGB; texture exposure is DX12 only.")
                 end
+                text("Effect strength - all passes")
                 slider("NR intensity", "NrIntensity", 0, 1)
-                text("Intensity: 0 = no model edit, 1 = full model edit.")
-                if imgui.tree_node("Advanced NR") then
-                    slider("Local tone", "NrLocalToneStrength", 0, 2)
-                    slider("Local structure", "NrLocalStructureStrength", 0, 2)
+                selection_help("Intensity changes what NR generates. Output blend controls how much of that result you see.")
+                selection_help("Applied within each pass; extra passes can strengthen the effect. Lowering these controls does not skip NR work.")
+                    if (draft.NrColorPipeline or 0) ~= 0 then
+                        nr_output_blend()
+                        selection_help("0% = original; 100% = full NR result. Above 100% exaggerates the effect and may cause artifacts. NR still runs at 0%.")
+                    else
+                        slider("Legacy HDR transfer strength", "NrHdrTransferStrength", 0, 2)
+                        slider("Legacy correction blend", "NrColorStrength", 0, 2)
+                        text("Legacy HDR uses separate tone-map transfer math. Bridge modes show one NR output blend.")
+                    end
+                if imgui.tree_node("Input normalization - all passes") then
+                    if status.settings.NrExposureMultiplier ~= nil then
+                        combo("NR exposure texture", "NrExposureMode", {[0]="Off",[1]="Multiply",[2]="Divide"})
+                        slider("Model-input exposure multiplier (all passes)", "NrExposureMultiplier", 0.01, 10)
+                    end
+                    slider("NR reference white (100-nit units)", "NrPaperWhiteScale", 0.01, 8)
+                    text(string.format("Manual normalization ratio: %.3f", (draft.NrExposureMultiplier or 1) / math.max(draft.NrPaperWhiteScale or 1, 0.01)))
+                    selection_help("For bridge modes: higher exposure brightens NR's input; higher reference white darkens it. Adjust exposure only and leave reference white fixed. Raising both equally cancels. Neither directly sets screen brightness.")
+                    selection_help("Reference white 1 = 100 nits. Ratio = manual exposure / reference white, before game exposure. Missing game exposure uses 1; automatic metering is not implemented. Legacy ignores the bridge exposure multiplier.")
+                    imgui.tree_pop()
+                end
+                if imgui.tree_node("Model detail and tone - all passes") then
+                    slider("Model local tone strength", "NrLocalToneStrength", 0, 2)
+                    slider("Model structure strength", "NrLocalStructureStrength", 0, 2)
+                    selection_help("Changes how NR treats tone and detail. Results vary by model and scene; these are not ordinary brightness/contrast controls.")
                     check("Automatic mask", "NrAutomaticMask")
-                    if draft.NrAutomaticMask == true then
+                    if draft.NrAutomaticMask == true or (draft.NrSecondPass and draft.NrPass2AutomaticMask) or (draft.NrThirdPass and draft.NrPass3AutomaticMask) then
                         slider("Skin structure", "NrSkinStructureStrength", 0, 2)
                     end
-                    if (status.nr_details or {}).hdr_input == true then
-                        slider("Paper white", "NrPaperWhiteScale", 0.01, 8)
-                    end
-                    slider("Transfer strength", "NrHdrTransferStrength", 0, 2)
-                    slider("Color strength", "NrColorStrength", 0, 2)
+                    imgui.tree_pop()
+                end
+                if imgui.tree_node("Compatibility - depth and motion") then
+                    selection_help("Game compatibility only. Leave defaults unless correcting a diagnosed depth or motion problem.")
                     combo("Depth convention", "NrDepthConvention", {[0]="Game/default",[1]="Normal",[2]="Reversed"})
                     slider("Motion scale X", "NrMotionScaleXMultiplier", -4, 4)
                     slider("Motion scale Y", "NrMotionScaleYMultiplier", -4, 4)

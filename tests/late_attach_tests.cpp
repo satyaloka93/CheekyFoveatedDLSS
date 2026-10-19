@@ -369,6 +369,13 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
     require(sr_inputs[0].reset == 0, "After input scope added a peripheral SR reset");
     require(sr_inputs[1].reset == 1, "After input scope consumed the center SR gaze reset");
     require(evaluation_order == "SSN" && nr_reset == 1, "After NR did not follow peripheral and center SR");
+    for (unsigned method : {1U, 0U}) {
+        command(method ? "1\n93\nset\nPeripheralMethod=1" : "1\n93\nset\nPeripheralMethod=0");
+        evaluate(0); evaluate(0);
+        require(sr_inputs.size() == 2 && evaluation_order == "SSN", "Peripheral method changed NR processing order");
+        require(sr_inputs[0].reset == 0 && sr_inputs[1].reset == 0,
+            "Peripheral method did not settle histories after warmup");
+    }
     command("1\n94\nset\nEnabled=false\nNrEnabled=false\nNrProcessingOrder=1\nHeightOffset=-1");
     for (unsigned i = 0; i < 3; ++i) {
         evaluate(0);
@@ -878,6 +885,27 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         require(nr_creates() - nr_releases() <= warm_live,
             "Settings churn accumulated retired NVIDIA features");
     }
+    // Conflicting saved pass-local strengths must not override shared tuning.
+    // Observe the actual feature creation snapshot used by the final pass.
+    command("1\n978\nset\nNrFoveated=true\nNrSecondPass=true\nNrThirdPass=false\nNrWorkingScale=1\nNrPass2WorkingScale=1\nNrPass3WorkingScale=1\nNrIntensity=0.25\nNrLocalToneStrength=0.5\nNrLocalStructureStrength=1.5\nNrSkinStructureStrength=0.75\nNrPass2Intensity=0.9\nNrPass3Intensity=0.9\nNrPass2LocalToneStrength=1.9\nNrPass3LocalToneStrength=1.9\nNrPass2LocalStructureStrength=0.1\nNrPass3LocalStructureStrength=0.1\nNrPass2SkinStructureStrength=0.1\nNrPass3SkinStructureStrength=0.1\nNrPass2Preset=1\nNrPass3Preset=2");
+    for (unsigned pass = 2; pass <= 3; ++pass) {
+        if (pass == 3) command("1\n979\nset\nNrThirdPass=true");
+        evaluate(0);
+        require(evaluation_order == (pass == 2 ? "NNS" : "NNNS"), "Shared tuning test did not evaluate all NR passes");
+        for (const auto& item : {
+            ModelSetting{"", "DLSSNR.Intensity", 0.F, 0.25F},
+            ModelSetting{"", "DLSSNR.LocalToneStrength", 0.F, 0.5F},
+            ModelSetting{"", "DLSSNR.LocalStructureStrength", 0.F, 1.5F},
+            ModelSetting{"", "DLSSNR.SkinStructureStrength", 0.F, 0.75F}}) {
+            float actual{};
+            require(ngx_succeeded(nr_created.Get(item.parameter, &actual)) && actual == item.changed,
+                "Extra NR pass used stale independent strength instead of shared tuning");
+        }
+        unsigned preset{};
+        require(ngx_succeeded(nr_created.Get("DLSSNR.Hint.Render.Preset", &preset)) && preset == pass - 1,
+            "Shared strengths must not override independent network choice");
+    }
+    command("1\n979\nset\nNrSecondPass=false\nNrThirdPass=false\nNrIntensity=1\nNrLocalToneStrength=1\nNrLocalStructureStrength=1\nNrSkinStructureStrength=1");
     if(GetEnvironmentVariableW(L"CHEEKY_TEST_NR_CAPTURE",nullptr,0)) {
         override_nr(model_color.Get());copy_nr_color(true);
         upload_solid(exposure_texture.Get(),{2.F,0.F,0.F,0.F});

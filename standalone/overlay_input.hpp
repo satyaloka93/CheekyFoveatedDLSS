@@ -15,6 +15,7 @@ struct InputState {
     std::atomic<bool> open{}, enabled{};
     std::atomic<unsigned> menu_key{VK_F8};
     std::atomic<bool> menu_key_down{}, rebinding{};
+    std::atomic<bool> screenshot_down{}, screenshot_requested{};
     std::atomic<unsigned> rebound_key{};
     std::wstring config_path;
     std::atomic<ULONGLONG> desktop_pointer_tick{};

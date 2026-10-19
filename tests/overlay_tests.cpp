@@ -32,11 +32,12 @@ extern "C" void __cdecl CheekyOpenXRMenuSetPointer(float, float, bool, bool) noe
 // supplies an explicit foreground state for reproducible input tests.
 HWND test_foreground{};
 bool test_f8_down{};
+bool test_screenshot_down{};
 int test_extra_key{};
 bool test_extra_down{};
 bool test_mouse_down[5]{};
 bool cheeky_overlay_test_mouse_down(unsigned button) { return test_mouse_down[button]; }
-bool cheeky_overlay_test_key_down(int key) { return key == VK_F8 ? test_f8_down : key == test_extra_key && test_extra_down; }
+bool cheeky_overlay_test_key_down(int key) { return (test_screenshot_down && (key==VK_CONTROL || key==VK_SHIFT || key==VK_F6)) || (key == VK_F8 ? test_f8_down : key == test_extra_key && test_extra_down); }
 bool cheeky_overlay_test_foreground(HWND window) { return window && window == test_foreground; }
 std::unordered_map<std::string, ImVec2> control_positions;
 namespace cheeky::standalone {
@@ -114,6 +115,19 @@ void test_ui_diagnostics() {
     unsigned char* pixels{}; int width{}, height{};
     io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
     test_nr_benchmark_controller();
+    {
+        InputState shot;
+        const auto previous_foreground=test_foreground;
+        shot.window=reinterpret_cast<HWND>(1);shot.enabled=true;test_foreground=shot.window;
+        test_screenshot_down=true;poll_overlay_hotkey(shot);
+        require(shot.screenshot_requested.exchange(false),"Screenshot chord triggers once");
+        poll_overlay_hotkey(shot);
+        require(!shot.screenshot_requested,"Held screenshot chord must not repeat");
+        test_screenshot_down=false;poll_overlay_hotkey(shot);
+        test_foreground=nullptr;test_screenshot_down=true;poll_overlay_hotkey(shot);
+        require(!shot.screenshot_requested,"Background game must not capture");
+        test_screenshot_down=false;test_foreground=previous_foreground;
+    }
     OverlayUiState state;
     InputState input;
     state.draft.center_mode = FoveationCenterMode::openxr_gaze;
@@ -208,10 +222,10 @@ void test_ui_diagnostics() {
     require(text.find("Foveated savings: 0.750 ms (37.5%)") != text.npos, "GPU savings must remain separate from FPS gain");
     require(text.find("DLSS input: 1000 x 800") != text.npos, "Nested crop dimensions leaked into input dimensions");
     require(text.find("Center input: 500 x 400 (25.0% of original) at 0,0") != text.npos, "Crop pixel percentage and origin missing");
-    require(text.find("Peripheral DLAA: Enabled (auto MV conversion)") != text.npos, "Motion-vector compatibility status missing");
+    require(text.find("Peripheral processing: Enabled (auto MV conversion)") != text.npos, "Motion-vector compatibility status missing");
     require(text.find("Full DLSS-NR call") == text.npos, "NR timings should not appear in SR");
     render("DLSS-NR"); text = render("DLSS-NR");
-    require(text.find("Cosmetic only; no performance impact.") != text.npos, "NR roundness note missing");
+    require(text.find("Changes the visible shape, not the rectangular area processed by NR.") != text.npos, "NR roundness note missing");
     require(text.find("Full DLSS-NR call: 3.000 ms") != text.npos, "NR timings belong in NR");
     require(text.find("DLSS-NR region: 1000 x 800 (25.0% of original) at 100,200") != text.npos, "NR region comparison missing");
     require(text.find("Last NGX result: 0x00000001") != text.npos, "NR result missing");

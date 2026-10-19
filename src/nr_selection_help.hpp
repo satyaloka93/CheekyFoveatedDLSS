@@ -11,9 +11,9 @@ inline constexpr const char* nr_network_help(std::uint32_t value) noexcept {
 }
 inline constexpr const char* nr_appearance_help(std::uint32_t value) noexcept {
     switch (value) {
-    case 1: return "Model B: RenoDX appearance mode B (API Style=1; previously labeled Natural). Changes network conditioning and associated grading, not the network preset.";
-    case 2: return "Model C: RenoDX appearance mode C (API Style=2; previously labeled Cinematic). Changes network conditioning and associated grading, not the network preset.";
-    default: return "Model A: RenoDX appearance mode A (API Style=0; previously labeled Standard). Baseline appearance mode, not NR off and not network Preset A.";
+    case 1: return "Model B: the look formerly called Natural. Not network Preset B or a speed setting.";
+    case 2: return "Model C: the look formerly called Cinematic. Not a newer network or a quality level.";
+    default: return "Model A: the baseline look, formerly Standard. NR remains enabled; this is not network Preset A.";
     }
 }
 inline constexpr const char* nr_network_version_help =

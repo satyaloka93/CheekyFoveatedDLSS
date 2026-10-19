@@ -33,6 +33,26 @@ existing Cheeky menu key (F11 in our Cyberpunk installation; upstream default F8
 
 WHAT CHANGED
 ============
+Local update (2026-10-19; not a newly published release):
+- Effect strength groups NR intensity and NR output blend together. Intensity
+  changes what NR generates; blend controls how much of that result is shown.
+  Blend 0% hides the result but does not stop NR processing. Start comparisons
+  at 100%; above 100% extrapolates and can introduce artifacts.
+- Strengths and input normalization now apply equally to all enabled passes.
+  Network, appearance, encoding and filter choices remain per-pass. Historical
+  pass-local strength/exposure values are retained in configs but ignored.
+- Input normalization groups reference white, exposure mode and multiplier.
+  Higher exposure brightens the model input; higher reference white darkens it.
+  Raising both proportionately cancels. Hold white fixed when tuning exposure.
+  Reference white 1 means 100 nits. No automatic exposure metering was added.
+- Exposure-source diagnostics describe the last primary view's binding, not
+  proof of a valid exposure texel or correct scene brightness.
+- Optional peripheral DLSS SR path and experimental F5 internal-feature reuse.
+  Both retain their existing defaults; see NR-F5-REUSE.txt for reuse limits.
+- Shared strengths are applied within each sequential pass, not once after all
+  passes. Updating may change a previously mismatched multipass configuration.
+
+Retained from preview 2:
 - Clear, per-pass NR network preset (Default/A/B) and NR appearance mode
   (Model A/B/C) selections, with explanatory text. Standalone and UEVR use
   mutually exclusive button rows; selecting a network does not change appearance.
@@ -63,8 +83,9 @@ In each enabled NR pass, select:
   NR color pipeline: Linear BT.709 bridge
   NR signal encoding: sRGB
   NR scaling domain: Linear
-  NR exposure texture: Multiply
-  NR exposure multiplier: 1.0
+Under shared Input normalization, select:
+  Exposure mode: Multiply
+  Exposure multiplier: 1.0
 Use this for the native DLSS linear BT.709 input path. An HDR display by itself
 does not mean the source is PQ or scRGB. Do not select sRGB source just because
 the display is SDR. Retain your working paper white, model and strengths.
@@ -136,6 +157,20 @@ before-upscaling settings, which used B for pass1 and A for pass2.
 
 OPTIONAL MIRROR CAPTURE (SEPARATE FROM BENCHMARK)
 ==============================================
+Manual capture: Ctrl+Shift+F6 while the game is foreground, or expand Manual
+headset screenshot and click Take headset screenshot in 5 seconds. The hotkey
+has NO countdown: close menus before pressing it. Only the menu button waits
+five seconds. Helper startup/readback still adds latency; this is not an exact
+keypress-frame capture. No NR settings are changed; NR-off also works.
+Requires Capture-NR-Screenshot.ps1, the helper and SteamVR path file described
+below beside the Host DLL. This is SteamVR composited capture, not a desktop
+screenshot. Both eye images are sequential, not simultaneous.
+Green-labelled PNGs and settings.json are copied to the Windows Pictures folder
+under CheekyFoveatedDLSS/<run>. Game-side nr-screenshots/<run> retains labelled
+PNGs, original raw BMPs, metadata and status/error files. Existing captures are
+never overwritten. Check the menu status if a capture fails. Other overlays
+may appear in these mirrors. This manual feature postdates preview2 publication.
+
 Standalone contains an optional seven-stage two-pass mirror comparison UI.
 It requires the separate cpvr_fov_image_audit.exe helper and nr-capture-openvr.txt
 pointing to SteamVR's openvr_api.dll beside the Host DLL. The helper is NOT bundled

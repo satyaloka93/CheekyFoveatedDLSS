@@ -203,6 +203,9 @@ std::string snapshot_locked(State& s) {
         << ",\"processing_order\":" << static_cast<unsigned>(nr.processing_order)
         << ",\"processing_width\":" << nr.processing_width << ",\"processing_height\":" << nr.processing_height
         << ",\"hdr_input\":" << (nr.hdr_input ? "true" : "false")
+        << ",\"exposure_source\":\"" << json_escape(nr.exposure_source ? nr.exposure_source : "Not evaluated yet") << "\""
+        << ",\"exposure_multiplier\":" << nr.exposure_multiplier
+        << ",\"exposure_view\":" << nr.exposure_view
         << ",\"runtime_path\":\"" << json_escape(nr.runtime_path.data()) << "\""
         << ",\"runtime_version\":\"" << json_escape(nr.runtime_version.data()) << "\""
         << ",\"skip_reason\":\"" << json_escape(nr.skip_reason ? nr.skip_reason : "") << "\""
@@ -213,6 +216,15 @@ std::string snapshot_locked(State& s) {
         << ",\"border_creations\":" << nr.border_creations
         << ",\"resource_rebinds\":" << nr.resource_rebinds
         << ",\"vram_bytes\":" << nr.intermediate_vram_bytes << "}"
+        << ",\"nr_vit_reuse\":{";
+    const auto vit=nr_vit_reuse_snapshot();
+    out << "\"computed\":" << vit.computed << ",\"reused\":" << vit.reused
+        << ",\"rejected\":" << vit.rejected << ",\"copied_bytes\":" << vit.copied_bytes
+        << ",\"hooked\":" << vit.hooked << ",\"reason\":\"" << json_escape(vit.reason) << "\""
+        << ",\"streaming\":true,\"split_runs\":" << vit.split_runs << ",\"replayed\":" << vit.replayed
+        << ",\"cache_misses\":" << vit.cache_misses << ",\"last_run_kernels\":" << vit.last_run_kernels
+        << ",\"last_run_calls\":" << vit.last_run_calls << ",\"sequence\":\"" << json_escape(vit.sequence)
+        << "\",\"miss_reason\":\"" << json_escape(vit.miss_reason) << "\"}"
         << ",\"nvidia_override_status\":\"" << diagnostic_dlss_override_status() << "\",\"apis\":[";
     for (unsigned index = 0; index < 2; ++index) {
         const auto d = diagnostic_snapshot(index ? DiagnosticApi::d3d12 : DiagnosticApi::d3d11);
@@ -619,7 +631,7 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
                     const auto key = line.substr(0, eq);
                     if (key != "NrEnabled" && key != "NrSecondPass" && key != "NrThirdPass" &&
                         key != "NrColorPipeline" && key != "NrPass2ColorPipeline" &&
-                        key != "NrProcessingOrder" && key != "NrPreset" &&
+key != "NrVitReuse" && key != "NrProcessingOrder" && key != "NrPreset" &&
                         key != "NrPass2Preset" && key != "NrPass3Preset") return false;
                 }
                 if (line.starts_with("EyeCalibrationLearned")) {

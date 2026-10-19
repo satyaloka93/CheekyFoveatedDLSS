@@ -8,12 +8,14 @@ foreach($mode in @('UEVR','Standalone')) {
  $stage=Join-Path $repo ('build\nr-release-'+$mode+'-'+[guid]::NewGuid().ToString('N'))
  New-Item -ItemType Directory -Path $stage | Out-Null
  $files=[ordered]@{'START-HERE.txt'=(Join-Path $repo 'NR-BRIDGE-START-HERE.txt');'licenses\Cheeky-GPLv3.txt'=(Join-Path $repo 'LICENSE');'licenses\MinHook.txt'=(Join-Path $repo 'third_party\reshade\deps\minhook\LICENSE.txt');'licenses\OpenVR.txt'=(Join-Path $repo 'third_party\openvr\LICENSE')}
+ $files['NR-F5-REUSE.txt']=Join-Path $repo 'NR-F5-REUSE.txt'
  if($mode -eq 'UEVR') {
   $files['plugins\CheekyFoveatedDLSS.dll']=Join-Path $bin 'CheekyFoveatedDLSS.dll'
   $files['plugins\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll']=Join-Path $bin 'CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll'
   $files['scripts\cheeky_foveated_dlss.lua']=Join-Path $repo 'uevr\scripts\cheeky_foveated_dlss.lua'
   $files['licenses\UEVR-API-MIT.txt']=Join-Path $repo 'third_party\uevr\LICENSE.txt'
  } else {
+  $files['CheekyFoveatedDLSS\Capture-NR-Screenshot.ps1']=Join-Path $repo 'standalone\Capture-NR-Screenshot.ps1'
   foreach($name in @('CheekyFoveatedDLSSHost.dll','CheekyFoveatedDLSSRuntime.dll')){$files['CheekyFoveatedDLSS\'+$name]=Join-Path $bin ('CheekyFoveatedDLSS\'+$name)}
   $files['licenses\DearImGui.txt']=Join-Path $repo 'third_party\reshade\deps\imgui\LICENSE.txt'
  }

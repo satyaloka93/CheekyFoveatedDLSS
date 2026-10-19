@@ -32,6 +32,7 @@ struct PeripheralDlaaRequest {
     std::uint32_t source_output_width{};
     std::uint32_t source_output_height{};
     float scale{1.0F};
+    std::uint32_t method{};
     std::uint32_t preset{5U};
     std::uint32_t color_base_x{};
     std::uint32_t color_base_y{};
@@ -53,6 +54,7 @@ struct PeripheralDlaaRequest {
 };
 
 struct PeripheralDlaaResources {
+    std::uint32_t output_width{}, output_height{};
     ID3D12Resource* color{};
     ID3D12Resource* depth{};
     ID3D12Resource* output{};

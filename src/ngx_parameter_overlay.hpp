@@ -39,9 +39,11 @@ public:
     NgxResult Get(const char* n,unsigned long long* v) const override {return numeric(n,v);}
     NgxResult Get(const char* n,float* v) const override {return numeric(n,v);}
     NgxResult Get(const char* n,double* v) const override {return numeric(n,v);}
-    NgxResult Get(const char* n,void** v) const override {const auto* p=find(n);if(!p)return fallback_?fallback_->Get(n,v):0xBAD00005U;if(p->kind!=Kind::pointer)return 0xBAD00005U;*v=p->data.pointer;return 1U;}
+    // NVIDIA's D3D12 parameter object aliases generic and D3D12 pointers.
+    // DLSS can request Color/Depth/Output through void** even after a typed Set.
+    NgxResult Get(const char* n,void** v) const override {const auto* p=find(n);if(!p)return fallback_?fallback_->Get(n,v):0xBAD00005U;if(p->kind!=Kind::pointer && p->kind!=Kind::d12)return 0xBAD00005U;*v=p->data.pointer;return 1U;}
     NgxResult Get(const char* n,ID3D11Resource** v) const override {const auto* p=find(n);if(!p)return fallback_?fallback_->Get(n,v):0xBAD00005U;if(p->kind!=Kind::d11)return 0xBAD00005U;*v=static_cast<ID3D11Resource*>(p->data.pointer);return 1U;}
-    NgxResult Get(const char* n,ID3D12Resource** v) const override {const auto* p=find(n);if(!p)return fallback_?fallback_->Get(n,v):0xBAD00005U;if(p->kind!=Kind::d12)return 0xBAD00005U;*v=static_cast<ID3D12Resource*>(p->data.pointer);return 1U;}
+    NgxResult Get(const char* n,ID3D12Resource** v) const override {const auto* p=find(n);if(!p)return fallback_?fallback_->Get(n,v):0xBAD00005U;if(p->kind!=Kind::d12 && p->kind!=Kind::pointer)return 0xBAD00005U;*v=static_cast<ID3D12Resource*>(p->data.pointer);return 1U;}
     void Reset() override {count_=0;}
 };
 }

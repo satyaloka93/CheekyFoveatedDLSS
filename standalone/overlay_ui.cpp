@@ -113,6 +113,7 @@ bool command(OverlayUiState& r, const OverlayRuntime& runtime, std::string_view 
 
 #include "nr_comparison.inl"
 #include "nr_benchmark.inl"
+#include "nr_screenshot.inl"
 
 template<class T> auto scalar(T value) {
     if constexpr (std::is_enum_v<T>) return static_cast<std::uint32_t>(value);
@@ -197,11 +198,15 @@ void draw_sr(Settings& s, bool rr) {
         ImGui::TextDisabled("(Use if preset causes blurriness)");
     }
     slider("Center supersampling", s.center_supersampling, 1.0F, 2.0F, "%.2fx");
-    ImGui::Checkbox("Peripheral DLAA", &s.peripheral_dlaa_enabled);
+    ImGui::Checkbox("Peripheral processing", &s.peripheral_dlaa_enabled);
     if (s.peripheral_dlaa_enabled) {
+        if (!rr) {
+            combo("Peripheral method", s.peripheral_method, "Scaled DLAA (existing)\0DLSS SR (experimental, native DX12)\0");
+            ImGui::TextWrapped("DLAA: antialias at the scaled grid. SR: reconstruct that same input to the game's render-resolution grid, then composite. SR can cost MORE; compare peripheral GPU timing. At scale 1 both use DLAA. DX11/Vulkan retain DLAA.");
+        }
         if (rr) rr_preset("Peripheral RR preset",s.rr_peripheral_preset);
         else preset("Peripheral preset", s.peripheral_dlaa_preset, false);
-        slider("Periphery scale", s.peripheral_dlaa_scale, .2F, 1.0F);
+        slider("Periphery input scale", s.peripheral_dlaa_scale, .2F, 1.0F);
     }
     if (rr) ImGui::TextWrapped("RR denoises both regions. Disabling peripheral DLAA uses input-resolution RR in the periphery.");
     ImGui::SeparatorText("Size and shape");
@@ -268,15 +273,8 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         std::uint32_t& preset_value = second ? s.nr_pass2_preset : s.nr_pass3_preset;
         std::uint32_t& style = second ? s.nr_pass2_style : s.nr_pass3_style;
         std::uint32_t& reconstruction = second ? s.nr_pass2_reconstruction : s.nr_pass3_reconstruction;
-        float& intensity = second ? s.nr_pass2_intensity : s.nr_pass3_intensity;
-        float& tone = second ? s.nr_pass2_local_tone_strength : s.nr_pass3_local_tone_strength;
-        float& structure = second ? s.nr_pass2_local_structure_strength : s.nr_pass3_local_structure_strength;
-        float& skin = second ? s.nr_pass2_skin_structure_strength : s.nr_pass3_skin_structure_strength;
         bool& mask = second ? s.nr_pass2_automatic_mask : s.nr_pass3_automatic_mask;
         bool& ui = second ? s.nr_pass2_ui_correction : s.nr_pass3_ui_correction;
-        float& paper = second ? s.nr_pass2_paper_white_scale : s.nr_pass3_paper_white_scale;
-        float& hdr = second ? s.nr_pass2_hdr_transfer_strength : s.nr_pass3_hdr_transfer_strength;
-        float& color = second ? s.nr_pass2_color_strength : s.nr_pass3_color_strength;
         std::uint32_t& depth = second ? s.nr_pass2_depth_convention : s.nr_pass3_depth_convention;
         float& motion_x = second ? s.nr_pass2_motion_scale_x_multiplier : s.nr_pass3_motion_scale_x_multiplier;
         float& motion_y = second ? s.nr_pass2_motion_scale_y_multiplier : s.nr_pass3_motion_scale_y_multiplier;
@@ -290,20 +288,13 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         combo("NR color pipeline", second ? s.nr_pass2_color_pipeline : s.nr_pass3_color_pipeline, "Legacy\0Linear BT.709 bridge\0sRGB bridge\0");
         combo("NR signal encoding", second ? s.nr_pass2_signal_encoding : s.nr_pass3_signal_encoding, "sRGB\0PQ SDR\0Linear SDR\0");
         combo("NR scaling domain", second ? s.nr_pass2_scaling_domain : s.nr_pass3_scaling_domain, "sRGB\0PQ\0Linear\0");
-        combo("NR exposure texture", second ? s.nr_pass2_exposure_mode : s.nr_pass3_exposure_mode, "Off\0Multiply\0Divide\0");
-        slider("NR exposure multiplier", second ? s.nr_pass2_exposure_multiplier : s.nr_pass3_exposure_multiplier, .01F, 10.F);
+        ImGui::TextWrapped("Input normalization is shared by all passes.");
         combo("NR downsample filter", second ? s.nr_pass2_downsample_filter : s.nr_pass3_downsample_filter, "Bilinear (default)\0Area (experimental)\0");
         combo("NR upsample filter", second ? s.nr_pass2_upsample_filter : s.nr_pass3_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0RenoDX-style cubic (unclamped)\0");
-        slider("Intensity", intensity, 0.0F, 1.0F);
+        ImGui::TextWrapped("Uses the shared strength and input-normalization controls. Model and processing choices here affect only this pass.");
         if (ImGui::TreeNode("Advanced neural rendering")) {
-            slider("Local tone strength", tone, 0.0F, 2.0F);
-            slider("Local structure strength", structure, 0.0F, 2.0F);
             ImGui::Checkbox("Automatic mask", &mask);
-            if (mask) slider("Skin structure strength", skin, 0.0F, 2.0F);
             ImGui::Checkbox("UI correction", &ui);
-            slider("Paper white scale", paper, .01F, 8.0F);
-            slider("HDR transfer strength", hdr, 0.0F, 2.0F);
-            slider("Color strength", color, 0.0F, 2.0F);
             combo("Depth convention", depth, "Game NGX flags\0Normal depth\0Reversed depth\0");
             slider("Motion scale X multiplier", motion_x, -4.0F, 4.0F);
             slider("Motion scale Y multiplier", motion_y, -4.0F, 4.0F);
@@ -334,7 +325,7 @@ void draw_nr(Settings& s) {
             slider("NR fovea width", s.nr_width, .2F, 1.0F);
             slider("NR fovea height", s.nr_height, .2F, 1.0F);
             slider("NR roundness", s.nr_roundness, 0.0F, 1.0F);
-            ImGui::TextDisabled("Cosmetic only; no performance impact.");
+            ImGui::TextDisabled("Changes the visible shape, not the rectangular area processed by NR.");
             slider("NR transition width", s.nr_transition_width, 0.0F, .3F, "%.3f");
         }
         ImGui::Checkbox("Show green alignment border", &s.nr_alignment_border_enabled);
@@ -343,6 +334,8 @@ void draw_nr(Settings& s) {
     ImGui::SeparatorText("DLSS5 Pass 1 - Settings");
     combo("Rendering order", s.nr_processing_order, "After upscaling\0Before upscaling (experimental)\0");
     slider("Working scale", s.nr_working_scale, .1F, 1.0F);
+    ImGui::Checkbox("Experimental F5 ViT reuse", &s.nr_vit_reuse);
+    ImGui::TextWrapped("Experimental speed option: reuses part of NR between frames. May lag during motion. Requires native DX12 and NR 310.9.16.0; otherwise normal NR runs.");
     nr_choice("NR network preset", s.nr_preset, true);
     ImGui::TextWrapped("%s", nr_network_help(s.nr_preset));
     ImGui::TextWrapped("%s", nr_network_version_help);
@@ -352,24 +345,54 @@ void draw_nr(Settings& s) {
     combo("NR color pipeline", s.nr_color_pipeline, "Legacy\0Linear BT.709 bridge\0sRGB bridge\0");
     combo("NR signal encoding", s.nr_signal_encoding, "sRGB\0PQ SDR\0Linear SDR\0");
     combo("NR scaling domain", s.nr_scaling_domain, "sRGB\0PQ\0Linear\0");
-    combo("NR exposure texture", s.nr_exposure_mode, "Off\0Multiply\0Divide\0");
-    slider("NR exposure multiplier", s.nr_exposure_multiplier, .01F, 10.F);
-    ImGui::TextWrapped("Linear BT.709 bridge follows RenoDX's native DLSS input assumption and smooth HDR compression. sRGB is an explicit source override; Legacy preserves previous behavior. Signal/exposure controls apply only to bridge modes. Exposure texture support is DX12 only; missing/invalid texture uses 1. Paper white scale 1 = 100 nits. HDR10/scRGB gamut parity is not implemented.");
+    ImGui::TextWrapped("Color conversion for NR, not a look preset. Leave unchanged unless testing the input format. Signal and exposure controls require a bridge mode. Full HDR10/scRGB support is not implemented.");
     combo("NR downsample filter", s.nr_downsample_filter, "Bilinear (default)\0Area (experimental)\0");
     combo("NR upsample filter", s.nr_upsample_filter, "Bilinear (default)\0Bicubic clamped (experimental)\0RenoDX-style cubic (unclamped)\0");
-    ImGui::TextWrapped("Filters change NR resizing, not DLSS-SR. Area averages the source footprint. Clamped cubic limits halos; RenoDX-style cubic removes that limit and may ring or overshoot. Compare at reduced NR working scale; full scale may look unchanged. No extra NR pass.");
-    ImGui::TextWrapped("RGB residual applies NR's color change to the original-resolution image, retaining detail at reduced working scale. Not an antialiasing or performance fix. Legacy preserves existing behavior.");
+    ImGui::TextWrapped("Resizes NR's working image, not DLSS-SR. Filters matter mainly below full working scale. Unclamped cubic can create halos.");
+    ImGui::TextWrapped("RGB residual keeps original image detail while applying NR's changes. It is not an anti-aliasing fix.");
+    ImGui::SeparatorText("Effect strength - all passes");
     slider("Intensity", s.nr_intensity, 0.0F, 1.0F);
-    if (ImGui::TreeNode("Advanced neural rendering")) {
-        slider("Local tone strength", s.nr_local_tone_strength, 0.0F, 2.0F);
-        slider("Local structure strength", s.nr_local_structure_strength, 0.0F, 2.0F);
+    ImGui::TextWrapped("Intensity: changes what NR generates. Output blend: controls how much of that result you see.");
+    ImGui::TextWrapped("Applied within each pass; multiple passes can strengthen the effect. Lowering these controls does not skip NR work.");
+        if (s.nr_color_pipeline != 0U) {
+            const float previous = 100.F * s.nr_hdr_transfer_strength * s.nr_color_strength;
+            float percent = previous;
+            slider("NR output blend", percent, 0.F, 400.F, "%.1f%%");
+            const bool reset = ImGui::Button("Full NR output (100%)");
+            if (reset) percent = 100.F;
+            if (reset || percent != previous) {
+                // Preserve the old 0..4 product and existing INI schema.
+                const float blend = percent / 100.F;
+                s.nr_hdr_transfer_strength = blend > 2.F ? 2.F : 1.F;
+                s.nr_color_strength = blend / s.nr_hdr_transfer_strength;
+            }
+            ImGui::TextWrapped("0% = original; 100% = full NR result. Above 100% exaggerates the effect and may cause artifacts. NR still runs at 0%.");
+        } else {
+            slider("Legacy HDR transfer strength", s.nr_hdr_transfer_strength, 0.0F, 2.0F);
+            slider("Legacy correction blend", s.nr_color_strength, 0.0F, 2.0F);
+            ImGui::TextWrapped("Legacy HDR needs separate transfer and blend controls. Bridge modes use one output blend.");
+        }
+    if (ImGui::TreeNode("Input normalization - all passes")) {
+        combo("NR exposure texture", s.nr_exposure_mode, "Off\0Multiply\0Divide\0");
+        slider("Model-input exposure multiplier (all passes)", s.nr_exposure_multiplier, .01F, 10.F);
+        slider("NR reference white (100-nit units)", s.nr_paper_white_scale, .01F, 8.0F);
+        ImGui::Text("Manual normalization ratio: %.3f", s.nr_exposure_multiplier / s.nr_paper_white_scale);
+        ImGui::TextWrapped("For bridge modes: higher exposure brightens NR's input; higher reference white darkens it. Adjust exposure only and leave reference white fixed. Raising both equally cancels. Neither directly sets screen brightness.");
+        ImGui::TextWrapped("Reference white 1 = 100 nits. Ratio = manual exposure / reference white, before game exposure. Missing game exposure uses 1; automatic metering is not implemented. Legacy ignores the bridge exposure multiplier.");
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Model detail and tone - all passes")) {
+        slider("Model local tone strength", s.nr_local_tone_strength, 0.0F, 2.0F);
+        slider("Model structure strength", s.nr_local_structure_strength, 0.0F, 2.0F);
+        ImGui::TextWrapped("Changes how NR treats tone and detail. Results vary by model and scene; these are not ordinary brightness/contrast controls.");
         ImGui::Checkbox("Automatic mask", &s.nr_automatic_mask);
-        if (s.nr_automatic_mask)
+        if (s.nr_automatic_mask || (s.nr_second_pass && s.nr_pass2_automatic_mask) || (s.nr_third_pass && s.nr_pass3_automatic_mask))
             slider("Skin structure strength", s.nr_skin_structure_strength, 0.0F, 2.0F);
         ImGui::Checkbox("UI correction", &s.nr_ui_correction);
-        slider("Paper white scale", s.nr_paper_white_scale, .01F, 8.0F);
-        slider("HDR transfer strength", s.nr_hdr_transfer_strength, 0.0F, 2.0F);
-        slider("Color strength", s.nr_color_strength, 0.0F, 2.0F);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Compatibility - depth and motion")) {
+        ImGui::TextWrapped("Game compatibility only. Leave defaults unless correcting a diagnosed depth or motion problem.");
         combo("Depth convention", s.nr_depth_convention, "Game NGX flags\0Normal depth\0Reversed depth\0");
         slider("Motion scale X multiplier", s.nr_motion_scale_x_multiplier, -4.0F, 4.0F);
         slider("Motion scale Y multiplier", s.nr_motion_scale_y_multiplier, -4.0F, 4.0F);
@@ -734,7 +757,7 @@ void draw_sr_performance(std::string_view snapshot, const Settings& s) {
             resolution_line(api, "Motion vectors", "motion_width", "motion_height");
             diagnostic_line(api, "Motion-vector space", "motion_space");
             const auto motion_space = plain(member(api, "motion_space"));
-            ImGui::TextWrapped("Peripheral DLAA: %s", !s.peripheral_dlaa_enabled ? "Disabled" :
+            ImGui::TextWrapped("Peripheral processing: %s", !s.peripheral_dlaa_enabled ? "Disabled" :
                 motion_space == "Output-resolution" ? "Enabled (auto MV conversion)" :
                 motion_space == "Input-resolution" ? "Enabled (direct MVs)" : "Enabled (waiting for compatible MV info)");
             ImGui::SeparatorText("DLSS-SR GPU timing");
@@ -743,7 +766,7 @@ void draw_sr_performance(std::string_view snapshot, const Settings& s) {
                 ImGui::TextWrapped("Turn off foveated DLSS-SR briefly to sample the full-frame baseline.");
             timing_line(api, "Foveated DLSS call", "foveated_ms");
             if (s.peripheral_dlaa_enabled) {
-                timing_line(api, "Peripheral DLAA call", "peripheral_ms");
+                timing_line(api, "Peripheral DLAA / SR call", "peripheral_ms");
                 if (!i && plain(member(api, "execution_path")) == "DX11 Direct") {
                     timing_line(api, "Peripheral preparation", "peripheral_preparation_ms");
                     timing_line(api, "Peripheral prep + DLAA total", "peripheral_total_ms");
@@ -890,6 +913,8 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
             runtime.host_name ? runtime.host_name : "Standalone", renderer, key_name.c_str());
         ImGui::TextWrapped("Changes apply when you release a control and are saved automatically.");
         if (!r.message.empty()) ImGui::TextWrapped("%s", r.message.c_str());
+        draw_nr_screenshot(r, runtime);
+        ImGui::BeginDisabled(nr_screenshot.active);
         draw_nr_benchmark(r, runtime);
         ImGui::BeginDisabled(nr_benchmark.active);
         draw_nr_comparison(r, runtime);
@@ -900,9 +925,10 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
             ImGui::TextWrapped("%s",capture_status.c_str());
         }
         ImGui::EndDisabled();
+        ImGui::EndDisabled();
         ImGui::Separator();
         const auto previous = r.draft;
-        ImGui::BeginDisabled(nr_capture.active || nr_benchmark.active);
+        ImGui::BeginDisabled(nr_capture.active || nr_benchmark.active || nr_screenshot.active);
         if (ImGui::BeginTabBar("controls")) {
             if (begin_tab("General")) {
                 ImGui::SeparatorText("Menu");
@@ -960,6 +986,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
                 diagnostic_line(r.snapshot, "Runtime state", "nr");
                 diagnostic_line(member(r.snapshot, "nr_details"), "Loaded NR DLL version", "runtime_version");
                 diagnostic_line(member(r.snapshot, "nr_details"), "Loaded NR DLL path", "runtime_path");
+                diagnostic_line(member(r.snapshot, "nr_details"), "Exposure source (last primary view)", "exposure_source");
                 ImGui::TextWrapped("DLL identity appears after the first NR load attempt. Loaded does not mean evaluating; check the evaluation counter below.");
                 if (r.draft.nr_enabled) {
                     const auto reason = plain(member(member(r.snapshot, "nr_details"), "skip_reason"));
@@ -1011,7 +1038,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
         }
         // Geometry/model controls can allocate expensive GPU resources. Keep a
         // local draft during dragging; commit only after the active edit ends.
-        if (!nr_capture.active && !nr_benchmark.active && !ImGui::IsAnyItemActive()) {
+        if (!nr_capture.active && !nr_benchmark.active && !nr_screenshot.active && !ImGui::IsAnyItemActive()) {
             Settings configured = previous;
             const auto current = member(r.snapshot, "settings");
 #define CHEEKY_SETTING(name, field) { const auto value = member(current, name); if (!value.empty()) set_named_setting(configured, name, value); }

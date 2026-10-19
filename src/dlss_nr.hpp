@@ -3,6 +3,7 @@
 #include "frame_contract.hpp"
 #include "ngx_abi.hpp"
 #include "settings.hpp"
+#include "nr_vit_reuse.hpp"
 #include "dlss_nr_contract.hpp"
 
 #include <cstdint>
@@ -90,6 +91,9 @@ struct DlssNrSnapshot {
     NrProcessingOrder processing_order{NrProcessingOrder::after_upscaling};
     std::uint32_t processing_width{}, processing_height{};
     bool hdr_input{};
+    const char* exposure_source{"Not evaluated yet"};
+    float exposure_multiplier{1.0F};
+    std::uint64_t exposure_view{};
     const char* skip_reason{};
     DlssNrState state{DlssNrState::waiting};
     DlssNrRoute route{DlssNrRoute::none};

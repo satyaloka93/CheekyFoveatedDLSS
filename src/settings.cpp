@@ -19,6 +19,7 @@ std::atomic<bool> d3d12_lower_hook{true};
 std::atomic<bool> d3d11_use_d3d12_transport{false};
 std::atomic<bool> peripheral_dlaa_enabled{true};
 std::atomic<std::uint32_t> peripheral_dlaa_scale_bits{0x3F400000U};
+std::atomic<std::uint32_t> peripheral_method{};
 std::atomic<std::uint32_t> center_preset{};
 std::atomic<bool> fix_motion_blur{};
 std::atomic<std::uint32_t> rr_center_preset{}, rr_peripheral_preset{};
@@ -65,6 +66,7 @@ std::atomic<std::uint32_t> nr_height_bits{0x3F0F5C29U};
 std::atomic<std::uint32_t> nr_roundness_bits{};
 std::atomic<std::uint32_t> nr_transition_bits{0x3DA3D70AU};
 std::atomic<std::uint32_t> nr_working_scale_bits{0x3F800000U};
+std::atomic<bool> nr_vit_reuse{false};
 std::atomic<std::uint32_t> nr_preset{};
 std::atomic<std::uint32_t> nr_style{};
 std::atomic<std::uint32_t> nr_reconstruction{};
@@ -215,6 +217,7 @@ Settings configured_settings() noexcept {
     settings.peripheral_dlaa_enabled =
         peripheral_dlaa_enabled.load(std::memory_order_acquire);
     settings.peripheral_dlaa_scale = load_float(peripheral_dlaa_scale_bits);
+    settings.peripheral_method = peripheral_method.load(std::memory_order_acquire);
     settings.center_supersampling = load_float(center_supersampling_bits);
     settings.afw_manual_coverage = afw_manual_coverage.load(std::memory_order_acquire);
     settings.afw_automatic_coverage = afw_automatic_coverage.load(std::memory_order_acquire);
@@ -273,6 +276,7 @@ Settings configured_settings() noexcept {
     settings.nr_roundness = load_float(nr_roundness_bits);
     settings.nr_transition_width = load_float(nr_transition_bits);
     settings.nr_working_scale = load_float(nr_working_scale_bits);
+    settings.nr_vit_reuse = nr_vit_reuse.load(std::memory_order_acquire);
     settings.nr_preset = nr_preset.load(std::memory_order_acquire);
     settings.nr_style = nr_style.load(std::memory_order_acquire);
     settings.nr_reconstruction = nr_reconstruction.load(std::memory_order_acquire);
@@ -356,6 +360,7 @@ Settings current_settings() noexcept {
 
 void update_settings(const Settings& settings) noexcept {
     std::lock_guard lock(settings_mutex);
+    peripheral_method.store(settings.peripheral_method == 1U ? 1U : 0U, std::memory_order_release);
     d3d12_lower_hook.store(settings.d3d12_lower_hook, std::memory_order_release);
     enabled.store(settings.enabled, std::memory_order_release);
     d3d11_use_d3d12_transport.store(
@@ -473,6 +478,7 @@ void update_settings(const Settings& settings) noexcept {
         nr_working_scale_bits,
         std::clamp(settings.nr_working_scale, 0.10F, 1.0F)
     );
+    nr_vit_reuse.store(settings.nr_vit_reuse, std::memory_order_release);
     nr_preset.store(normalize_nr_preset(settings.nr_preset), std::memory_order_release);
     nr_style.store((std::min)(settings.nr_style, 2U), std::memory_order_release);
     nr_reconstruction.store(settings.nr_reconstruction == 1U ? 1U : 0U, std::memory_order_release);

@@ -1,0 +1,77 @@
+EXPERIMENTAL F5 INTERNAL NR REUSE (standalone D3D12)
+
+F5 is janblade's Fork From a Fork From a Fork of OptiScaler, not an NVIDIA
+option or a keyboard shortcut. This port reuses the ViT bottleneck output on
+alternate NR view-render rounds. It still runs the rest of NR, every enabled pass,
+and the existing processing/color pipeline. It is NOT whole-image reuse.
+
+Default: OFF. Requires NVIDIA NR file version 310.9.16.0. Unsupported DLLs,
+kernel/output layouts run normal NR. Split-across-call ViT sequences are now
+supported: first compute and learn a complete sequence, then validate each
+kernel, geometry and owned parameter blob during later reuse evaluations.
+If a match changes after skipping starts, replay the skipped CURRENT parameters
+before computing the rest. Unexpected ordering disables reuse for the session.
+The menu counters and benchmark detect this; a build or copy test is not proof
+that model reuse works in-game. Vulkan/D3D11 transport are not implemented.
+
+Private caches are keyed by device and view ID (including independent pass
+bits), with learned launch sequences, reset checks and a shared NR render round.
+A repeated primary view starts a new round; extra passes share their primary
+view's slot. This supports paired/alternating eyes without counting command
+submissions or generated presentations as new NR frames.
+Both FP8 and FP16 use a private GPU copy, not DLL scratch memory. Lost cadence,
+same-round repeated evaluations, changed parameters and resets compute again.
+The cache's recording must have been observed at submission before reuse.
+Resetting an unsubmitted command list invalidates its cache. Copy execution
+follows the original NR command-list/queue ordering; no extra CPU/GPU wait is added.
+Moving gaze/content can still show temporal lag: this is a quality tradeoff.
+GPU copy allocations are retained until process exit, capped at 256 MiB.
+After runtime detachment, restart the game to use reuse again; its hooks are
+explicitly removed even if GPU submission observers remain for retirement.
+If restoration fails, all skipped current-run launches are replayed with UAV
+barriers before the decoder continues; reuse is disabled until restart.
+Replay uses copied current-call parameters, never last frame's parameter data.
+An evaluation ending without the expected End fails NR safely after recovery.
+Like the F5 reference, this relies on the supported DLL's ViT run being
+contiguous with no hidden cross-run dependencies; tests do not prove that for
+arbitrary future models/drivers. This is why the DLL gate remains strict.
+
+TESTING
+Open Cheeky's own menu using its configured key (default F8; this Cyberpunk
+installation is bound to F11, MenuKey=122 in CheekyOverlay.ini), then:
+NR automatic benchmarks (network or F5 reuse) ->
+Start after-upscaling F5 OFF/ON benchmark.
+Enable NR first. You get 5 seconds to close the menu. Play normally and move
+your gaze naturally for approximately 133 seconds. Do not change graphics/FG.
+The benchmark preserves independent network presets and enabled pass count.
+It tests four OFF/ON pairs with reversed order, 8s warmup + 8s sampling each.
+Every ON measurement must record actual reuse; every OFF one must record none.
+Rejected reuse or missing GPU samples makes the result INVALID, not a speedup.
+Original settings restore at completion/cancel/lease timeout. Menu reopening
+cancels. Results and snapshots: CheekyFoveatedDLSS/nr-benchmarks/<run>/.
+Times measure the existing GPU NR block, not game FPS or total frame time.
+Scene variation can make the comparison inconclusive. Inspect visual quality
+separately; the benchmark cannot measure temporal artifacts.
+The existing network A/B benchmark now forces F5 reuse OFF temporarily.
+
+PROVENANCE / LICENSE
+Reference: https://github.com/janblade/OptiScaler-F5-DLSSNR-Multipass/tree/v0.1.32
+DlssNrVitReuse.h describes the bottleneck and output ABI; DlssNrNative.cpp
+describes NVAPI interception and private copies. These are GPLv3 project code.
+src/nr_vit_copy_kernel.hpp is vendored from DlssNrVitCopyKernel.h (v0.1.32).
+src/nr_vit_copy.ptx is its corresponding source. Generation commands are in
+the generated header. Credit to janblade and OptiScaler contributors.
+NVIDIA NVAPI ABI was checked at commit 9b181ea572f680327fe01a14a0f1f41c78034104.
+These CU entrypoints are marked experimental/internal by NVIDIA; this feature
+is not a supported NVIDIA DLSS-NR API. See repository LICENSE (GPLv3).
+
+VALIDATION
+tests/nr_vit_policy_tests.cpp: host contract/cadence/shape checks.
+scripts/test-nr-vit.ps1: actual GPU save+restore byte comparison and mock
+dispatch ordering, split/batched equivalence, reset, parameter-change recovery,
+view isolation, incomplete/interrupted runs and restore-error replay.
+Overlay --ui tests: balanced OFF/ON benchmark, preset preservation, automatic
+restoration and refusal of a no-op reuse test.
+In-game reuse rate, quality and performance still require user validation.
+Benchmark JSON now includes streaming=true, split_runs, replayed, cache_misses,
+miss_reason, last_run_kernels/calls and a bounded first-run kernel-name census.

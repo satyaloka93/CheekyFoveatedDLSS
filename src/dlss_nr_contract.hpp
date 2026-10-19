@@ -6,6 +6,14 @@
 
 namespace cheeky::foveated_dlss {
 
+inline void apply_shared_nr_normalization(Settings& pass, const Settings& master) noexcept {
+    // Normalize all sequential passes consistently; encoding and model choices
+    // remain independent. The shader reverses this scaling during restoration.
+    pass.nr_paper_white_scale = master.nr_paper_white_scale;
+    pass.nr_exposure_mode = master.nr_exposure_mode;
+    pass.nr_exposure_multiplier = master.nr_exposure_multiplier;
+}
+
 struct NrRegion {
     std::uint32_t base_x{};
     std::uint32_t base_y{};

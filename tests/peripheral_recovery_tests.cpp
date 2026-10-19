@@ -12,10 +12,23 @@ using Microsoft::WRL::ComPtr;
 void require(bool value, const char* message) { if (!value) throw std::runtime_error(message); }
 void check(HRESULT result) { require(SUCCEEDED(result), "Peripheral recovery GPU fixture failure"); }
 unsigned creates{}, releases{};
-NgxResult create(ID3D12GraphicsCommandList*, unsigned, NgxParameters*, NgxHandle** handle) {
+unsigned created_quality{}, created_width{}, created_output_width{};
+NgxResult create(ID3D12GraphicsCommandList*, unsigned, NgxParameters* params, NgxHandle** handle) {
+    params->Get("PerfQualityValue", &created_quality);
+    params->Get("Width", &created_width);
+    params->Get("OutWidth", &created_output_width);
     *handle = reinterpret_cast<NgxHandle*>(static_cast<uintptr_t>(++creates)); return 1;
 }
-NgxResult evaluate(ID3D12GraphicsCommandList*, const NgxHandle*, const NgxParameters*, NgxProgressCallback) { return 1; }
+NgxResult evaluate(ID3D12GraphicsCommandList*, const NgxHandle*, const NgxParameters* params, NgxProgressCallback) {
+    if (created_quality == 2U) {
+        for (const auto* name : {"Color", "Depth", "MotionVectors", "Output"}) {
+            void* raw{}; ID3D12Resource* typed{};
+            if (!ngx_succeeded(params->Get(name, &raw)) || !ngx_succeeded(params->Get(name, &typed)) ||
+                    !raw || raw != typed) return 0xBAD00005U;
+        }
+    }
+    return 1;
+}
 NgxResult release_feature(NgxHandle*) { ++releases; return 1; }
 
 void policy_test() {
@@ -120,8 +133,35 @@ void run_peripheral_recovery_tests() {
     require(releases == 2, "Completed old generations were not released exactly once");
     for (unsigned i = 121; i < 126; ++i) { frame(i); flush(); }
     require(creates == 4 && releases == 2, "Stable views recreated features again");
+    request.startup_recovery_eligible = false;
+    parameters.Set("PerfQualityValue", 99U);
+    parameters.Set("DLSS.Hint.Render.Preset.Quality", 12U);
+    for (unsigned method : {1U, 0U, 1U}) {
+        request.method = method;
+        PeripheralDlaaResources resources; NgxResult result{};
+        require(evaluate_peripheral_dlaa_ngx(request, resources, result), "Peripheral method switch failed");
+        const auto expected_output = method ? 64U : resources.working_width;
+        require(resources.output_width == expected_output && resources.output->GetDesc().Width == expected_output,
+            "Peripheral SR output allocation/extent mismatch");
+        require(created_width == resources.working_width && created_output_width == expected_output &&
+            created_quality == (method ? 2U : 5U), "Peripheral NGX creation dimensions/quality mismatch");
+        unsigned restored{}; parameters.Get("PerfQualityValue", &restored);
+        require(restored == 99U, "Peripheral method leaked quality override");
+        parameters.Get("DLSS.Hint.Render.Preset.Quality", &restored);
+        require(restored == 12U, "Peripheral method leaked preset override");
+        restore_peripheral_dlaa_output(list.Get(), resources);
+        flush();
+    }
+    request.scale = 1.F;
+    {
+        PeripheralDlaaResources resources; NgxResult result{};
+        require(evaluate_peripheral_dlaa_ngx(request, resources, result), "SR unity scale failed");
+        require(created_quality == 5U && resources.working_width == resources.output_width,
+            "SR unity scale must use DLAA");
+        restore_peripheral_dlaa_output(list.Get(), resources); flush();
+    }
     check(list->Close());
     release_peripheral_dlaa_resources();
-    require(releases == 4, "Final active feature cleanup mismatch");
+    require(releases == creates, "Final active feature cleanup mismatch");
     std::cout << "PASS: peripheral startup recovery policy, both eyes, same-size textures/features, deferred GPU retirement, no repeat\n";
 }

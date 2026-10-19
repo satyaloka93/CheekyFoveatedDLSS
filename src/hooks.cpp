@@ -2162,6 +2162,7 @@ DebugExposure current_streamline_debug_exposure(const void* frame, const void* c
     request.source_output_width = output_width;
     request.source_output_height = output_height;
     request.scale = evaluation.settings.peripheral_dlaa_scale;
+    request.method = evaluation.settings.peripheral_method;
     request.preset = evaluation.settings.peripheral_dlaa_preset;
     request.color_base_x = color_tag.extent.left;
     request.color_base_y = color_tag.extent.top;
@@ -2206,10 +2207,13 @@ DebugExposure current_streamline_debug_exposure(const void* frame, const void* c
     peripheral_viewport.value ^= peripheral_streamline_view_mask;
 
     options.next = nullptr;
-    options.mode = sl_dlss_mode_dlaa;
-    options.output_width = working_width;
-    options.output_height = working_height;
+    const bool peripheral_sr = evaluation.peripheral.output_width != working_width ||
+        evaluation.peripheral.output_height != working_height;
+    options.mode = peripheral_sr ? 3U : sl_dlss_mode_dlaa; // Streamline MaxQuality
+    options.output_width = evaluation.peripheral.output_width;
+    options.output_height = evaluation.peripheral.output_height;
     options.dlaa_preset = evaluation.settings.peripheral_dlaa_preset;
+    options.quality_preset = evaluation.settings.peripheral_dlaa_preset;
     if (set_options(&peripheral_viewport, &options) != 0U) {
         cleanup();
         return false;
@@ -2261,10 +2265,10 @@ DebugExposure current_streamline_debug_exposure(const void* frame, const void* c
     resources[3U].memory = nullptr;
     resources[3U].view = nullptr;
     resources[3U].state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    resources[3U].width = working_width;
-    resources[3U].height = working_height;
+    resources[3U].width = evaluation.peripheral.output_width;
+    resources[3U].height = evaluation.peripheral.output_height;
     tags[3U].resource = &resources[3U];
-    tags[3U].extent = {0U, 0U, working_width, working_height};
+    tags[3U].extent = {0U, 0U, evaluation.peripheral.output_width, evaluation.peripheral.output_height};
 
     const auto tag_result = submit_streamline_private_tags(
         evaluation.frame_tagging, frame, evaluation.viewport, peripheral_viewport, tags.data(),
@@ -4858,6 +4862,7 @@ void evaluate_nr_after_native_d3d12(
         peripheral_request.source_output_width = contract.output_width;
         peripheral_request.source_output_height = contract.output_height;
         peripheral_request.scale = rr && !effective_settings.peripheral_dlaa_enabled ? 1.F : effective_settings.peripheral_dlaa_scale;
+        peripheral_request.method = effective_settings.peripheral_method;
         peripheral_request.preset = rr ? effective_settings.rr_peripheral_preset : effective_settings.peripheral_dlaa_preset;
         peripheral_request.color_base_x = full_color_x;
         peripheral_request.color_base_y = full_color_y;
@@ -6205,6 +6210,7 @@ template <typename T>
 }
 
 void shutdown_direct_export_hooks() noexcept {
+    nr_vit_reuse_shutdown();
     afw_note_warp_observer(false);
     if (!minhook_initialized.exchange(false, std::memory_order_acq_rel)) {
         return;
@@ -6694,6 +6700,7 @@ void note_d3d12_command_list_submission(
     ID3D12CommandQueue* const queue,
     ID3D12GraphicsCommandList* const command_list
 ) noexcept {
+    if(queue)nr_vit_reuse_submitted(command_list);
     note_d3d12_command_list_submission_impl(queue, command_list);
 }
 
@@ -6703,6 +6710,7 @@ void note_d3d12_present(ID3D12CommandQueue* const queue) noexcept {
 
 void note_d3d12_command_list_reset(ID3D12GraphicsCommandList* const list) noexcept {
     if (!list) return;
+    nr_vit_reuse_reset(list);
     std::lock_guard lock(d3d12_nr_timing_mutex);
     const auto identity = timing_list_identity(list, false);
     for (auto& timer : d3d12_nr_timers) for (auto& slot : timer.slots) {

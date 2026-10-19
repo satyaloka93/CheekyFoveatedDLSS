@@ -14,6 +14,20 @@ using Observe = void(*)(const NgxParameters*);
 Observe observe{};
 Observe observe_created{};
 struct Feature { unsigned id; MockNgxParameters created; NgxHandle* lower{}; };
+MockNgxParameters snapshot_parameters(const NgxParameters* params) {
+    if (const auto* mock = dynamic_cast<const MockNgxParameters*>(params)) return *mock;
+    // Real NGX accepts the virtual parameter interface, not our test map's
+    // concrete layout. Private overlays must be read through that interface.
+    MockNgxParameters out;
+    for (const auto* key : {"Width", "Height", "OutWidth", "OutHeight", "PerfQualityValue",
+            "DLSS.Feature.Create.Flags", "Reset", "DLSS.Hint.Render.Preset.DLAA",
+            "DLSS.Hint.Render.Preset.Quality", "DLSS.Hint.Render.Preset.Balanced",
+            "DLSS.Hint.Render.Preset.Performance", "DLSS.Hint.Render.Preset.UltraPerformance",
+            "DLSS.Hint.Render.Preset.UltraQuality"}) {
+        unsigned value{}; if (ngx_succeeded(params->Get(key, &value))) out.Set(key, value);
+    }
+    return out;
+}
 using Create12 = NgxResult(*)(ID3D12GraphicsCommandList*, unsigned, NgxParameters*, NgxHandle**);
 using Evaluate12 = NgxResult(*)(ID3D12GraphicsCommandList*, const NgxHandle*, const NgxParameters*, NgxProgressCallback);
 using Evaluate12C = NgxResult(*)(ID3D12GraphicsCommandList*, const NgxHandle*, const NgxParameters*, NgxProgressCallbackC);
@@ -124,7 +138,7 @@ EXPORT NgxResult NVSDK_NGX_D3D12_CreateFeature(ID3D12GraphicsCommandList* list, 
         const auto result = forward_create(list, feature, params, &lower);
         if (!ngx_succeeded(result)) return result;
     }
-    *out=reinterpret_cast<NgxHandle*>(new Feature{++creates, *static_cast<MockNgxParameters*>(params), lower}); return 1U;
+    *out=reinterpret_cast<NgxHandle*>(new Feature{++creates, snapshot_parameters(params), lower}); return 1U;
 }
 EXPORT NgxResult NVSDK_NGX_D3D11_EvaluateFeature(ID3D11DeviceContext* context, const NgxHandle* handle, const NgxParameters* params, NgxProgressCallback callback) {
     const auto result = evaluate(handle, params);

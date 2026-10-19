@@ -3,6 +3,12 @@
 #include <cstdint>
 namespace cheeky::foveated_dlss {
 struct PeripheralDlaaDimensions { std::uint32_t width{},height{}; };
+// SR reconstructs the scaled input to the game's input-resolution grid.
+// Final headset/output enlargement is still performed by the compositor.
+// RR keeps its existing denoising path; do not replace it with plain SR.
+inline bool peripheral_uses_sr(std::uint32_t method, std::uint32_t feature) noexcept {
+    return method == 1U && feature == 1U;
+}
 inline PeripheralDlaaDimensions peripheral_dlaa_dimensions(
     const std::uint32_t render_width,
     const std::uint32_t render_height,

@@ -50,6 +50,7 @@ struct Settings {
     bool d3d11_use_d3d12_transport{false};
     bool peripheral_dlaa_enabled{true};
     float peripheral_dlaa_scale{0.75F};
+    std::uint32_t peripheral_method{}; // 0: legacy scaled DLAA; 1: DLSS SR (native D3D12)
     std::uint32_t center_preset{};
     bool fix_motion_blur{false}; // Opt-in DX12 SR center motion-vector copy.
     std::uint32_t rr_center_preset{};
@@ -102,6 +103,7 @@ struct Settings {
     float gaze_jump_reset_ratio{0.125F};
 
     bool nr_enabled{false};
+    bool nr_vit_reuse{false}; // Experimental F5 private bottleneck copy; native D3D12 only.
     NrProcessingOrder nr_processing_order{NrProcessingOrder::after_upscaling};
     bool nr_foveated{true};
     bool nr_second_pass{false};

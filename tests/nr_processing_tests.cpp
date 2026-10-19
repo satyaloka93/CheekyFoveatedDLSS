@@ -62,6 +62,23 @@ int run_nr_processing_tests() {
         const auto require = [](bool value, const char* why) {
             if (!value) throw std::runtime_error(why);
         };
+        for (unsigned mode = 0; mode < 3; ++mode) {
+            Settings master{}, pass{};
+            master.nr_exposure_mode = mode;
+            master.nr_exposure_multiplier = 4.13F;
+            master.nr_paper_white_scale = 6.27F;
+            pass.nr_exposure_mode = (mode + 1) % 3;
+            pass.nr_exposure_multiplier = 1.F;
+            pass.nr_paper_white_scale = 1.78F;
+            pass.nr_preset = 2;
+            pass.nr_style = 1;
+            pass.nr_signal_encoding = 2;
+            apply_shared_nr_normalization(pass, master);
+            require(pass.nr_exposure_mode == mode && pass.nr_exposure_multiplier == 4.13F &&
+                pass.nr_paper_white_scale == 6.27F, "Extra pass normalization must match the shared controls");
+            require(pass.nr_preset == 2 && pass.nr_style == 1 && pass.nr_signal_encoding == 2,
+                "Shared normalization must preserve independent model/encoding choices");
+        }
         // Old INIs exposed intensity up to 2, although the model saturates at 1.
         const auto saved_settings = current_settings();
         const Settings defaults{};
