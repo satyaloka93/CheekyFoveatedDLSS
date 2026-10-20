@@ -80,8 +80,17 @@ class GazeProjectionCache {
         GazeProjection projection; };
     std::vector<Entry> entries_;
 public:
+    GazeProjection recent(std::uint32_t viewport, std::uint64_t now) const {
+        for (auto i = entries_.rbegin(); i != entries_.rend(); ++i)
+            if (i->viewport == viewport)
+                return now >= i->time && now - i->time <= 100 ? i->projection : GazeProjection{};
+        return {};
+    }
     void record(std::uint32_t viewport, std::uintptr_t frame, std::uint64_t now, GazeProjection projection) {
-        std::erase_if(entries_, [=](const auto& e) { return e.viewport == viewport; });
+        // Constants for frame N+1 may arrive before frame N is evaluated.
+        // Retain bounded in-flight frames, while invalidation replaces the
+        // exact viewport/frame publication rather than borrowing another eye.
+        std::erase_if(entries_, [=](const auto& e) { return e.viewport == viewport && e.frame == frame; });
         if (entries_.size() >= 32) entries_.erase(entries_.begin());
         entries_.push_back({viewport, frame, now, projection});
     }
@@ -96,13 +105,50 @@ public:
     }
 };
 
-struct GazeProjectionContext { std::uint64_t view{}; GazeProjection projection{}; };
+// A lower NGX evaluation is nested synchronously inside slEvaluateFeature.
+// Cyberpunk 0.1.8 can omit VRCAM slSetConstants. Its exported render windows
+// are MAIN then VRCAM, l/r/d/u. Only use the missing VRCAM window after
+// validating MAIN against a recent observed camera. Never mirror a UV.
+inline GazeProjection cyberpunk_missing_camera(std::uint32_t viewport,
+    std::uint32_t vrcam, int mode, const float* windows, const GazeProjection& main) {
+    if (mode != 1 || !vrcam || viewport != vrcam || !windows) return {};
+    const GazeProjection primary{windows[0], windows[1], windows[3], windows[2], true};
+    const GazeProjection secondary{windows[4], windows[5], windows[7], windows[6], true};
+    float u{}, v{};
+    if (!projection_forward_center(primary, u, v) ||
+        !projection_forward_center(secondary, u, v) || !gaze_projection_matches(primary, main)) return {};
+    return secondary;
+}
+
+// Carry only that call's frame/viewport-matched camera, never a last-seen eye.
+// Thread-local RAII also prevents another render thread or later call inheriting it.
+struct NativeGazeProjectionContext {
+    bool active{};
+    GazeProjection projection{};
+    std::uint32_t viewport{UINT32_MAX};
+};
+inline thread_local NativeGazeProjectionContext native_gaze_projection{};
+class ScopedNativeGazeProjection {
+    NativeGazeProjectionContext previous_;
+public:
+    ScopedNativeGazeProjection(GazeProjection projection, std::uint32_t viewport)
+        : previous_(native_gaze_projection) {
+        native_gaze_projection = {true, projection, viewport};
+    }
+    ~ScopedNativeGazeProjection() { native_gaze_projection = previous_; }
+    ScopedNativeGazeProjection(const ScopedNativeGazeProjection&) = delete;
+    ScopedNativeGazeProjection& operator=(const ScopedNativeGazeProjection&) = delete;
+};
+
+struct GazeProjectionContext { std::uint64_t view{}; GazeProjection projection{};
+    std::uint32_t viewport{UINT32_MAX}; };
 inline thread_local GazeProjectionContext active_gaze_projection{};
 class ScopedGazeProjection {
     GazeProjectionContext previous_;
 public:
-    ScopedGazeProjection(std::uint64_t view, GazeProjection projection) : previous_(active_gaze_projection) {
-        active_gaze_projection = {view, projection};
+    ScopedGazeProjection(std::uint64_t view, GazeProjection projection,
+        std::uint32_t viewport = UINT32_MAX) : previous_(active_gaze_projection) {
+        active_gaze_projection = {view, projection, viewport};
     }
     ~ScopedGazeProjection() { active_gaze_projection = previous_; }
     ScopedGazeProjection(const ScopedGazeProjection&) = delete;

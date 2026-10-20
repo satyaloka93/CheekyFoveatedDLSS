@@ -304,7 +304,7 @@ bool start_host(std::uint32_t host,bool vulkan) {
         if (!start(&input)) { log_host("Resident runtime refused startup; see its log"); return false; }
         if (!vulkan && !install_graphics_hooks()) { runtime_detach(attachment); attachment=0; log_host("Graphics hook discovery failed"); return false; }
         active_host=host; started=true;
-        log_host("Host ready; waiting for game graphics. F8 opens settings.");
+        log_host("Host ready; waiting for game graphics. Menu key: CheekyOverlay.ini [Overlay] MenuKey; F8=119 only when no valid override. Release template uses F11=122. Effective key/path logged when input attaches.");
         return true;
     } catch (...) {
         if (runtime_detach && attachment && !started) { runtime_detach(attachment); attachment=0; }

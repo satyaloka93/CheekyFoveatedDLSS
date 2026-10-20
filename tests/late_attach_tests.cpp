@@ -587,6 +587,12 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
     transition_resource(color_dst.pResource,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
     f.list->CopyTextureRegion(&color_dst,0,0,0,&color_src,nullptr);
     transition_resource(color_dst.pResource,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    // Scene resets must reach each independent pass even without reuse.
+    command("1\n900\nset\nNrFoveated=true\nNrSecondPass=true\nNrThirdPass=true");
+    evaluate(1); evaluate(0); evaluate(1);
+    require(std::count(evaluation_order.begin(),evaluation_order.end(),'N')==3 && nr_reset==1,
+        "Scene reset did not reach final NR pass");
+    command("1\n901\nset\nNrFoveated=false\nNrSecondPass=false\nNrThirdPass=false");
     for (unsigned flags : {2U, 3U})
     for (unsigned reconstruction : {0U, 1U})
     for (unsigned filters : {0U, 1U, 2U, 3U})

@@ -40,6 +40,8 @@ bool cheeky_overlay_test_mouse_down(unsigned button) { return test_mouse_down[bu
 bool cheeky_overlay_test_key_down(int key) { return (test_screenshot_down && (key==VK_CONTROL || key==VK_SHIFT || key==VK_F6)) || (key == VK_F8 ? test_f8_down : key == test_extra_key && test_extra_down); }
 bool cheeky_overlay_test_foreground(HWND window) { return window && window == test_foreground; }
 std::unordered_map<std::string, ImVec2> control_positions;
+std::vector<std::string> overlay_diagnostic_messages;
+void cheeky_overlay_test_diagnostic(const char* message) { overlay_diagnostic_messages.emplace_back(message); }
 namespace cheeky::standalone {
 void test_nr_benchmark_controller();
 void overlay_test_control(const char* label) {
@@ -825,6 +827,16 @@ int main(int argc, char** argv) {
         SendMessageW(window.value, WM_KEYDOWN, VK_F9, 1);
         require(consume_menu_key_rebind(*input) == VK_F9, "Rebind did not capture F9");
         require(save_menu_key(*input, VK_F9), "Rebind did not save F9");
+        require(std::any_of(overlay_diagnostic_messages.begin(),overlay_diagnostic_messages.end(),
+            [](const auto& line){return line.find("Saved MenuKey=120")!=std::string::npos;}),
+            "Saved binding not logged");
+        const auto valid_path=input->config_path;
+        input->config_path=L"";
+        require(!save_menu_key(*input,VK_F9),"Invalid INI path accepted");
+        require(std::any_of(overlay_diagnostic_messages.begin(),overlay_diagnostic_messages.end(),
+            [](const auto& line){return line.find("[Overlay ERROR]")!=std::string::npos;}),
+            "Input configuration failure not logged");
+        input->config_path=valid_path;
         SendMessageW(window.value, WM_KEYUP, VK_F9, LPARAM{1} << 31);
         require(GetPrivateProfileIntW(L"Overlay", L"MenuKey", 0, test_ini.c_str()) == VK_F9,
             "Rebind did not persist F9");

@@ -631,6 +631,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     text("Rendering order: Unavailable in this runtime")
                 end
                 slider("NR working scale", "NrWorkingScale", 0.1, 1)
+                if status.settings.NrVitReuse ~= nil then check("Experimental F5 ViT reuse", "NrVitReuse") end
                 nr_choice("NR network preset", "NrPreset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
                 network_help(draft.NrPreset)
                 nr_choice("NR appearance mode", "NrStyle", {[0]="Model A",[1]="Model B",[2]="Model C"})

@@ -1,4 +1,5 @@
 #include "overlay_input.hpp"
+#include "overlay_diagnostics.hpp"
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <MinHook.h>
@@ -294,7 +295,10 @@ void poll_overlay_hotkey(InputState& input) {
         // Preserve window-thread ownership of input release and cursor handling.
         // Both polling and normal key messages claim the same press edge.
         const auto message = toggle_message();
-        if (!message || !PostMessageW(input.window, message, 0, 0)) input.menu_key_down = false;
+        if (!message || !PostMessageW(input.window, message, 0, 0)) {
+            overlay_failure("Posting menu-toggle message",GetLastError());
+            input.menu_key_down = false;
+        }
     }
 }
 
@@ -306,12 +310,17 @@ void begin_menu_key_rebind(InputState& input) {
 unsigned consume_menu_key_rebind(InputState& input) { return input.rebound_key.exchange(0); }
 
 bool save_menu_key(InputState& input, unsigned key) {
-    if (!valid_menu_key(key) || input.config_path.empty()) return false;
+    if (!valid_menu_key(key) || input.config_path.empty()) {
+        overlay_failure("Saving menu key: invalid key or missing INI path",ERROR_INVALID_PARAMETER);return false;
+    }
     const auto value = std::to_wstring(key);
-    if (!WritePrivateProfileStringW(L"Overlay", L"MenuKey", value.c_str(), input.config_path.c_str())) return false;
+    if (!WritePrivateProfileStringW(L"Overlay", L"MenuKey", value.c_str(), input.config_path.c_str())) {
+        overlay_failure("Writing CheekyOverlay.ini (check directory permissions)",GetLastError());return false;
+    }
     // A held binding must finish its current press before it can toggle.
     input.menu_key_down = (physical_key_state(key) & 0x8000) != 0;
     input.menu_key = key;
+    overlay_log("[Overlay input] Saved MenuKey=%u INI=%ls",key,input.config_path.c_str());
     return true;
 }
 
@@ -416,19 +425,27 @@ InputState* attach_input(HWND window) {
     auto* input = new InputState;
     input->window = window;
     input->config_path = menu_config_path();
+    const bool config_exists=!input->config_path.empty() && GetFileAttributesW(input->config_path.c_str())!=INVALID_FILE_ATTRIBUTES;
     if (!input->config_path.empty()) {
         const auto saved = GetPrivateProfileIntW(L"Overlay", L"MenuKey", VK_F8, input->config_path.c_str());
         if (valid_menu_key(saved)) input->menu_key = saved;
+        else overlay_log("[Overlay input] Invalid MenuKey=%u; using F8 (119)",saved);
     }
+    overlay_log("[Overlay input] INI=%ls exists=%u effective MenuKey=%u (F8=119 F11=122); HWND=%p foreground=%u",
+        input->config_path.c_str(),unsigned(config_exists),input->menu_key.load(),window,unsigned(foreground(window)));
     input->previous = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(window, GWLP_WNDPROC));
-    if (!input->previous || !SetPropW(window, input_property, input)) { delete input; return nullptr; }
+    if (!input->previous || !SetPropW(window, input_property, input)) {
+        overlay_failure("Installing input window property",GetLastError());delete input; return nullptr;
+    }
     SetLastError(ERROR_SUCCESS);
     const auto previous = SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(overlay_wndproc));
     if (!previous && GetLastError() != ERROR_SUCCESS) {
+        overlay_failure("Subclassing input window",GetLastError());
         RemovePropW(window, input_property); delete input; return nullptr;
     }
     input->previous = reinterpret_cast<WNDPROC>(previous);
     input->enabled = true;
+    overlay_log("[Overlay input] Handler attached; press MenuKey=%u while game window is focused",input->menu_key.load());
     return input;
 }
 

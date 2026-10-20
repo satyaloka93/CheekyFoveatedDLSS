@@ -1,6 +1,7 @@
 #include "overlay.hpp"
 #include "overlay_ui.hpp"
 #include "overlay_input.hpp"
+#include "overlay_diagnostics.hpp"
 #include "settings_io.hpp"
 #include "version.h"
 #include "openvr_menu.hpp"
@@ -206,6 +207,9 @@ bool supported_surface(DXGI_COLOR_SPACE_TYPE space, DXGI_FORMAT format) {
 }
 
 bool initialize(Renderer& r, IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, const DXGI_SWAP_CHAIN_DESC& desc, ChainMetadata metadata) {
+    const auto ok=[](HRESULT hr,const char* operation) {
+        return SUCCEEDED(hr) || overlay_failure(operation,static_cast<unsigned long>(hr));
+    };
     // Every early failure must replace the startup message. Otherwise resource
     // failures look indistinguishable from a window that never gained focus.
     set_status("Overlay initialization failed while creating graphics resources");
@@ -224,33 +228,35 @@ bool initialize(Renderer& r, IDXGISwapChain* swapchain, ID3D12CommandQueue* queu
             set_status("D3D12 overlay rejected a queue from another device"); return false;
         }
         ComPtr<IDXGISwapChain3> swapchain3;
-        if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3))) || !desc.BufferCount || desc.BufferCount > 16) return false;
+        if (!ok(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3)),"Query IDXGISwapChain3")) return false;
+        if (!desc.BufferCount || desc.BufferCount > 16) return overlay_failure("Unsupported backbuffer count",E_INVALIDARG);
         r.queue = queue;
         D3D12_DESCRIPTOR_HEAP_DESC heap{};
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV; heap.NumDescriptors = desc.BufferCount + 1;
-        if (FAILED(r.device12->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&r.rtv_heap)))) return false;
+        if (!ok(r.device12->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&r.rtv_heap)),"Create overlay RTV heap")) return false;
         heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV; heap.NumDescriptors = descriptor_count; heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-        if (FAILED(r.device12->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&r.srv_heap)))) return false;
+        if (!ok(r.device12->CreateDescriptorHeap(&heap, IID_PPV_ARGS(&r.srv_heap)),"Create overlay SRV heap")) return false;
         r.rtv_stride = r.device12->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
         r.srv_stride = r.device12->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
         r.frames.resize(desc.BufferCount); r.buffers.resize(desc.BufferCount);
         auto handle = r.rtv_heap->GetCPUDescriptorHandleForHeapStart();
         for (UINT index = 0; index < desc.BufferCount; ++index) {
-            if (FAILED(swapchain->GetBuffer(index, IID_PPV_ARGS(&r.buffers[index]))) ||
-                FAILED(r.device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&r.frames[index].allocator)))) return false;
+            if (!ok(swapchain->GetBuffer(index, IID_PPV_ARGS(&r.buffers[index])),"Get D3D12 backbuffer") ||
+                !ok(r.device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&r.frames[index].allocator)),"Create overlay command allocator")) return false;
             r.device12->CreateRenderTargetView(r.buffers[index].Get(), nullptr, handle);
             handle.ptr += r.rtv_stride;
         }
         const auto backbuffer = r.buffers.front()->GetDesc();
         r.framebuffer_width = static_cast<UINT>(backbuffer.Width); r.framebuffer_height = backbuffer.Height;
-        if (FAILED(r.device12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, r.frames.front().allocator.Get(), nullptr, IID_PPV_ARGS(&r.command_list))) ||
-            FAILED(r.command_list->Close()) || FAILED(r.device12->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&r.fence)))) return false;
+        if (!ok(r.device12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, r.frames.front().allocator.Get(), nullptr, IID_PPV_ARGS(&r.command_list)),"Create overlay command list") ||
+            !ok(r.command_list->Close(),"Close initial overlay command list") ||
+            !ok(r.device12->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&r.fence)),"Create overlay fence")) return false;
         r.fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-        if (!r.fence_event) return false;
+        if (!r.fence_event) return overlay_failure("Create overlay fence event",GetLastError());
     } else {
         r.device11->GetImmediateContext(&r.context11);
         ComPtr<ID3D11Texture2D> backbuffer;
-        if (FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&backbuffer)))) return false;
+        if (!ok(swapchain->GetBuffer(0, IID_PPV_ARGS(&backbuffer)),"Get D3D11 backbuffer")) return false;
         D3D11_TEXTURE2D_DESC backbuffer_desc{}; backbuffer->GetDesc(&backbuffer_desc);
         r.framebuffer_width = backbuffer_desc.Width; r.framebuffer_height = backbuffer_desc.Height;
         ComPtr<ID3D11Device1> device1;
@@ -270,7 +276,7 @@ bool initialize(Renderer& r, IDXGISwapChain* swapchain, ID3D12CommandQueue* queu
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NoMouseCursorChange;
     ImGui::StyleColorsDark();
     r.win32_ready = ImGui_ImplWin32_Init(r.window);
-    if (!r.win32_ready) return false;
+    if (!r.win32_ready) return overlay_failure("ImGui Win32 initialization",ERROR_INVALID_WINDOW_HANDLE);
     if (r.dx12) {
         ImGui_ImplDX12_InitInfo info;
         info.Device = r.device12.Get(); info.CommandQueue = r.queue.Get();

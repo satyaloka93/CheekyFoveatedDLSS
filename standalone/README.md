@@ -113,6 +113,10 @@ lets you change the menu key and shows compatibility controls and runtime status
 Its other tabs provide DLSS-SR, gaze/stereo, DLSS-NR and diagnostics controls.
 Changes are saved automatically. The menu key is saved in `CheekyOverlay.ini`
 beside the host DLL; use **Reset to F8** in General to restore the default.
+The fork's Standalone upgrade includes `defaults/CheekyOverlay.ini` (F11) and
+`Setup-CheekyMenu.ps1`, which creates the active INI only when missing. See
+[OVERLAY-MENU.txt](OVERLAY-MENU.txt) for setup, manual key codes and exact paths.
+Existing INIs are preserved; without an INI the runtime still defaults to F8.
 Pause the game when changing settings if it continues to react to keys while
 the menu is open; some games poll input outside Windows message handling.
 An open menu stays visible when the game loses desktop focus, as long as the

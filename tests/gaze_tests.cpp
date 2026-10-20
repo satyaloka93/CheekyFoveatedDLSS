@@ -16,6 +16,7 @@
 #include "gaze_math.hpp"
 #include "gaze_policy.hpp"
 #include "streamline_viewport.hpp"
+#include "streamline_abi.hpp"
 #include "streamline_create_extent.hpp"
 #include "openvr_gaze.hpp"
 #include "openvr_gaze_math.hpp"
@@ -39,6 +40,7 @@
 #include <iostream>
 #include <limits>
 #include <filesystem>
+#include <thread>
 
 namespace cheeky::foveated_dlss {
 // The core GPU harness explicitly drives post-submit/reset notifications.
@@ -2764,6 +2766,12 @@ int run_d3d11_binding_tests();
 int run_debug_exposure_tests();
 void test_cyberpunk_shared_gaze() {
     using namespace cheeky::foveated_dlss;
+    const SlStructType real_viewport_type{0x171b6435, 0x9b3c, 0x4fc8,
+        {0x99, 0x94, 0xfb, 0xe5, 0x25, 0x69, 0xaa, 0xa4}};
+    const SlViewportHandle viewport_probe{};
+    expect(std::memcmp(&real_viewport_type, &viewport_probe.struct_type, sizeof(real_viewport_type)) == 0,
+        "Lower hook must recognize the real Streamline ViewportHandle GUID, not zero");
+    expect(viewport_probe.struct_version == 1, "ViewportHandle uses the official version-1 ABI");
     reset_gaze_foveation();
     Settings settings; settings.enabled = true; settings.width = settings.height = .24F;
     settings.center_mode = FoveationCenterMode::openxr_gaze_right_eye;
@@ -2804,6 +2812,77 @@ void test_cyberpunk_shared_gaze() {
             "Both views follow right/up gaze in render space");
     }
     expect(crops[0].input_base_x == crops[1].input_base_x, "Shared views receive the same gaze center");
+    // 0.1.8: the same direction has DIFFERENT UVs in asymmetric MAIN/VRCAM.
+    // Deliver the frame/viewport-matched camera as the lower NGX hook does.
+    const GazeProjection asymmetric[2] = {
+        {-1.841771F, .947191F, 1.328981F, -1.328981F, true}, eye};
+    GazeProjectionCache exact_cameras;
+    const float windows[8]{asymmetric[0].left, asymmetric[0].right, asymmetric[0].down, asymmetric[0].up,
+        asymmetric[1].left, asymmetric[1].right, asymmetric[1].down, asymmetric[1].up};
+    // Reproduce real missing-constants failure: MAIN publishes, VRCAM never does.
+    GazeProjectionCache missing_camera;
+    missing_camera.record(0, 100, 1000, asymmetric[0]);
+    expect(!missing_camera.find(1, 100, 1001).valid, "Fixture has no VRCAM constants");
+    const auto recovered = cyberpunk_missing_camera(1, 1, 1, windows, missing_camera.recent(0, 1001));
+    expect(gaze_projection_matches(recovered, asymmetric[1]), "Missing VRCAM gets its own published window");
+    fresh(); evaluate(1, recovered);
+    expect(gaze_diagnostics().shared_fresh, "Missing-constants VRCAM actually tracks through crop path");
+    expect(!cyberpunk_missing_camera(0, 1, 1, windows, asymmetric[0]).valid, "Never replace MAIN");
+    expect(!cyberpunk_missing_camera(2, 1, 1, windows, asymmetric[0]).valid, "Unknown viewport rejected");
+    expect(!cyberpunk_missing_camera(1, 1, 0, windows, asymmetric[0]).valid, "Symmetric mode rejected");
+    expect(!cyberpunk_missing_camera(1, 1, 2, windows, asymmetric[0]).valid, "Projection test mode rejected");
+    expect(!cyberpunk_missing_camera(1, 1, 1, windows, camera).valid, "Mismatched MAIN/zoom rejected");
+    expect(!cyberpunk_missing_camera(1, 1, 1, windows, missing_camera.recent(0, 1101)).valid, "Stale MAIN rejected");
+    missing_camera.record(0, 101, 1002, {});
+    expect(!missing_camera.recent(0, 1003).valid, "Invalid latest MAIN cannot borrow older camera");
+    float invalid_windows[8]{};
+    expect(!cyberpunk_missing_camera(1, 1, 1, invalid_windows, asymmetric[0]).valid, "Uninitialized exports rejected");
+    exact_cameras.record(7, 123, 1000, asymmetric[0]);
+    exact_cameras.record(19, 123, 1000, asymmetric[1]);
+    source.center_u = -eye.left / (eye.right - eye.left); source.center_v = .5F;
+    for (const unsigned i : {1U, 0U, 0U, 1U}) {
+        fresh();
+        const auto viewport = i == 0 ? 7U : 19U;
+        {
+            const ScopedNativeGazeProjection bridge(exact_cameras.find(viewport, 123, 1001), viewport);
+            bool other_thread_active = true;
+            std::thread other([&] { other_thread_active = native_gaze_projection.active; });
+            other.join();
+            expect(!other_thread_active, "Another render thread cannot inherit this eye's camera");
+            const ScopedGazeProjection bound(1001 + i, native_gaze_projection.projection,
+                native_gaze_projection.viewport);
+            expect(calculate_coordinated_crop(settings, 1001 + i, nullptr, 1048, 1000, 3144, 3000,
+                0, 0, crops[i], reset, &snapshot, &centers[i]), "Asymmetric native crop resolves");
+            expect(gaze_diagnostics().shared_fresh, "Asymmetric per-evaluation camera tracks");
+            expect_near(centers[i].u, -asymmetric[i].left / (asymmetric[i].right - asymmetric[i].left),
+                .001F, "Per-eye optical center is correct regardless of evaluation order");
+            // A nested call with missing constants must not inherit its parent's eye.
+            {
+                const ScopedNativeGazeProjection nested({}, UINT32_MAX);
+                expect(!native_gaze_projection.projection.valid, "Missing nested camera masks parent");
+            }
+            expect(gaze_projection_matches(native_gaze_projection.projection, asymmetric[i]),
+                "Nested return restores only the enclosing camera");
+        }
+        expect(!native_gaze_projection.active, "Camera bridge never leaks beyond evaluation");
+    }
+    expect(centers[0].u > .6F && centers[1].u < .4F,
+        "Asymmetric eye centers must not use one shared UV");
+    expect(!exact_cameras.find(7, 124, 1001).valid, "Wrong frame cannot borrow an asymmetric camera");
+    expect(!exact_cameras.find(8, 123, 1001).valid, "Wrong viewport cannot borrow an asymmetric camera");
+    expect(!exact_cameras.find(7, 123, 1101).valid, "Expired asymmetric camera rejected");
+    exact_cameras.record(7, 124, 1002, asymmetric[0]);
+    expect(exact_cameras.find(7, 123, 1003).valid,
+        "Newer frame constants must not erase an older in-flight frame");
+    exact_cameras.record(7, 123, 1004, {});
+    expect(!exact_cameras.find(7, 123, 1005).valid && exact_cameras.find(7, 124, 1005).valid,
+        "Invalid constants invalidate their exact frame only");
+    for (unsigned i = 0; i < 2; ++i) {
+        source.center_u = -eye.left / (eye.right - eye.left) + .08F;
+        fresh(); evaluate(i, asymmetric[i]);
+        expect(centers[i].u > -asymmetric[i].left / (asymmetric[i].right - asymmetric[i].left),
+            "Both asymmetric views follow gaze to the right");
+    }
     source.center_u = .327F; source.center_v = .511F; fresh(); evaluate(0, camera);
     expect(centers[0].u > .48F && centers[0].u < .50F, "Historical left-edge circle regression rejected");
     fresh(); snapshot.publication_qpc -= frequency.QuadPart; evaluate(0, camera);
@@ -2866,8 +2945,8 @@ void test_cyberpunk_shared_gaze() {
         expect(!gaze_diagnostics().shared_projection, "Previous-session camera cannot be borrowed");
         record_shared_gaze_projection(camera); fresh(); evaluate(0, {});
         expect(gaze_diagnostics().shared_fresh, "New-session camera publication restores shared gaze");
-        auto asymmetric = camera; asymmetric.right += .1F;
-        record_shared_gaze_projection(asymmetric); fresh(); evaluate(0, {});
+        auto unowned_asymmetric = camera; unowned_asymmetric.right += .1F;
+        record_shared_gaze_projection(unowned_asymmetric); fresh(); evaluate(0, {});
         expect(!gaze_diagnostics().shared_projection, "Asymmetric eye-specific camera cannot be shared");
         record_shared_gaze_projection(camera); fresh(); evaluate(0, {});
         Sleep(60); LARGE_INTEGER now{}; QueryPerformanceCounter(&now); snapshot.publication_qpc = now.QuadPart;

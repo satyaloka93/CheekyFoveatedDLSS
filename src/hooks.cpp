@@ -35,6 +35,7 @@
 #include <algorithm>
 #include <array>
 #include "streamline_viewport.hpp"
+#include "streamline_export_routes.hpp"
 #include "streamline_abi.hpp"
 #include "streamline_create_extent.hpp"
 #include <atomic>
@@ -386,6 +387,7 @@ CRITICAL_SECTION streamline_hook_lock{};
 CRITICAL_SECTION streamline_evaluation_lock{};
 std::atomic<bool> streamline_hook_lock_ready{};
 std::atomic<bool> streamline_inline_mode{};
+cheeky::StreamlineExportRoutes streamline_export_routes;
 std::atomic<bool> streamline_inline_install_failed{};
 InlineHook inline_sl_evaluate{};
 InlineHook inline_sl_set_tag{};
@@ -3353,6 +3355,27 @@ void stamp_streamline_output(ID3D12GraphicsCommandList* list, std::uint32_t resu
         static_cast<D3D12_RESOURCE_STATES>(resource.state));
 }
 
+// Read existing upstream exports only; no engine offsets, port edits or
+// diagnostics switch required. Windows are written on the normal render path.
+GazeProjection cyberpunk_published_camera(std::uint32_t viewport) {
+    const auto module = GetModuleHandleW(L"CyberpunkVR_Stereo.dll");
+    if (!module) return {};
+    const auto mode = reinterpret_cast<const int*>(GetProcAddress(module, "CyberpunkVR_AsymProjection"));
+    const auto enabled = reinterpret_cast<const int*>(GetProcAddress(module, "CyberpunkVR_VrcamDlss"));
+    const auto vrcam = reinterpret_cast<const std::uint32_t*>(GetProcAddress(module, "CyberpunkVR_VrcamDlssViewport"));
+    const auto windows = reinterpret_cast<const float*>(GetProcAddress(module, "CyberpunkVR_DebugAsymWindow"));
+    if (!mode || !enabled || !vrcam || !windows || !*enabled || *mode != 1 || viewport != *vrcam) return {};
+    float first[8]{}, second[8]{};
+    std::memcpy(first, windows, sizeof(first));
+    GazeProjection main{};
+    AcquireSRWLockShared(&streamline_lock);
+    main = streamline_gaze_projections.recent(0, GetTickCount64());
+    ReleaseSRWLockShared(&streamline_lock);
+    std::memcpy(second, windows, sizeof(second));
+    if (std::memcmp(first, second, sizeof(first)) != 0) return {};
+    return cyberpunk_missing_camera(viewport, *vrcam, *mode, first, main);
+}
+
 std::uint32_t hook_sl_evaluate_feature(
     const std::uint32_t feature,
     const void* const frame,
@@ -3407,6 +3430,37 @@ std::uint32_t hook_sl_evaluate_feature(
             }
             streamline_foveation_active.store(false, std::memory_order_release);
             LeaveCriticalSection(&streamline_evaluation_lock);
+            // Cyberpunk 0.1.8 uses different asymmetric MAIN/VRCAM cameras.
+            // Preserve the exact Streamline viewport/frame through the lower
+            // NGX hook; the old symmetric-only shared cache cannot represent it.
+            if (GetModuleHandleW(L"CyberpunkVR_Stereo.dll") &&
+                current_settings().center_mode == FoveationCenterMode::openxr_gaze_right_eye) {
+                std::uint32_t viewport_id = UINT32_MAX;
+                unsigned matches = 0;
+                if (inputs && input_count <= 32U) for (std::uint32_t i = 0; i < input_count; ++i) {
+                    const auto* base = static_cast<const SlBaseStructure*>(inputs[i]);
+                    if (base && std::memcmp(&base->struct_type, &viewport_type.struct_type, sizeof(SlStructType)) == 0) {
+                        viewport_id = static_cast<const SlViewportHandle*>(inputs[i])->value;
+                        ++matches;
+                    }
+                }
+                GazeProjection projection{};
+                if (matches == 1 && (viewport_id & 0x60000000U) == 0) {
+                    AcquireSRWLockShared(&streamline_lock);
+                    projection = streamline_gaze_projections.find(viewport_id, gaze_frame_key(frame), GetTickCount64());
+                    ReleaseSRWLockShared(&streamline_lock);
+                }
+                if (!projection.valid && matches == 1) {
+                    projection = cyberpunk_published_camera(viewport_id);
+                    static std::atomic<unsigned> recovery_logs{};
+                    if (projection.valid && recovery_logs.fetch_add(1, std::memory_order_relaxed) < 4)
+                        trace_event("Cyberpunk camera recovered from published VRCAM window viewport=%u tangents=%.5f,%.5f,%.5f,%.5f",
+                            viewport_id, projection.left, projection.right, projection.up, projection.down);
+                }
+                const ScopedNativeGazeProjection camera_scope(projection,
+                    matches == 1 ? viewport_id : UINT32_MAX);
+                return original(feature, frame, inputs, input_count, command_buffer);
+            }
             return original(feature, frame, inputs, input_count, command_buffer);
         }
     }
@@ -5170,6 +5224,13 @@ void stamp_d3d12_game_output(ID3D12GraphicsCommandList* list, const NgxHandle* h
 }
 NgxResult process_d3d12_evaluation(const D3D12NgxEvaluationCall& call,
     D3D12NgxEvaluateFn original, void* context) {
+    // Bind the call-scoped camera to the actual native handle (not an assumed
+    // left/right index). This encloses SR and NR crop preparation alike.
+    std::optional<ScopedGazeProjection> camera_scope;
+    if (native_gaze_projection.active) {
+        camera_scope.emplace(static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(call.handle)),
+            native_gaze_projection.projection, native_gaze_projection.viewport);
+    }
     // Streamline supplies its own tagged extents. Restrict normalization to
     // recognizable native DLSS calls, including handles adopted after attach.
     const bool native_dlss = !inside_streamline_evaluation && recognizable_d3d12_dlss_evaluation(call);
@@ -5463,8 +5524,9 @@ template <typename Function>
         );
         return false;
     }
+    streamline_export_routes.publish(name, target);
     trace_event(
-        "Streamline MinHook installed name=%s target=%p trampoline=%p detour=%p",
+        "Streamline MinHook installed (cooperative export routing) name=%s target=%p trampoline=%p detour=%p",
         name, target, trampoline, detour
     );
     return true;
@@ -5577,6 +5639,7 @@ void bootstrap_streamline_options_hook() noexcept {
 }
 
 void uninstall_streamline_inline_hooks() noexcept {
+    streamline_export_routes.clear();
     if (const auto target = streamline_options_target.exchange(nullptr)) {
         static_cast<void>(MH_DisableHook(target));
         static_cast<void>(MH_RemoveHook(target));
@@ -6288,6 +6351,14 @@ void remember_original(
     const bool streamline = _wcsicmp(target_name, L"sl.interposer.dll") == 0;
     if (streamline) {
         diagnostic_note_streamline_detected();
+        // Returning our wrapper directly bypasses observers hooked onto the
+        // export later (Cyberpunk VR's depth/MV capture, for example). Return
+        // the saved public entry, not our trampoline or an already patched IAT
+        // value. Per-export readiness also handles partial installation.
+        if (const auto target = streamline_export_routes.find(function_name)) {
+            diagnostic_note_hook(DiagnosticApi::d3d12);
+            return reinterpret_cast<FARPROC>(target);
+        }
 #define CHEEKY_REPLACE_SL(export_name, storage, hook) \
         if (std::strcmp(function_name, export_name) == 0) { \
             remember_original( \

@@ -15,6 +15,10 @@ foreach($mode in @('UEVR','Standalone')) {
   $files['scripts\cheeky_foveated_dlss.lua']=Join-Path $repo 'uevr\scripts\cheeky_foveated_dlss.lua'
   $files['licenses\UEVR-API-MIT.txt']=Join-Path $repo 'third_party\uevr\LICENSE.txt'
  } else {
+  $files['OVERLAY-MENU.txt']=Join-Path $repo 'standalone\OVERLAY-MENU.txt'
+  $files['Setup-CheekyMenu.ps1']=Join-Path $repo 'standalone\Setup-CheekyMenu.ps1'
+  $files['defaults\CheekyOverlay.ini']=Join-Path $repo 'standalone\CheekyOverlay.ini'
+  $files['CYBERPUNK-STANDALONE.txt']=Join-Path $repo 'CYBERPUNK-STANDALONE.txt'
   $files['CheekyFoveatedDLSS\Capture-NR-Screenshot.ps1']=Join-Path $repo 'standalone\Capture-NR-Screenshot.ps1'
   foreach($name in @('CheekyFoveatedDLSSHost.dll','CheekyFoveatedDLSSRuntime.dll')){$files['CheekyFoveatedDLSS\'+$name]=Join-Path $bin ('CheekyFoveatedDLSS\'+$name)}
   $files['licenses\DearImGui.txt']=Join-Path $repo 'third_party\reshade\deps\imgui\LICENSE.txt'

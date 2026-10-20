@@ -1,6 +1,35 @@
 Cyberpunk VR standalone compatibility
 ====================================
 
+Cyberpunk VR Port 0.1.8 asymmetric cameras (2026-10-20)
+------------------------------------------------------
+The port still renders MAIN and VRCAM, but now normally uses asymmetric
+per-eye projections. Shared gaze must not borrow one asymmetric camera for
+both eyes. The lower D3D12 path now carries the exact Streamline frame and
+viewport camera through its nested NGX evaluation and binds it to that
+evaluation's native handle. No assumptions about eye evaluation order.
+The old symmetric-only, 100ms fallback remains for older port versions.
+
+Keep CenterMode=3 and the port's asymmetric projection enabled. This change
+requires only the rebuilt standalone runtime DLL; it does not require a new
+port DLL, global OpenXR layer, host DLL, proxy, registry or UEVR deployment.
+Missing/wrong-frame/expired camera data remains rejected; no raw headset-UV
+fallback was introduced. UEVR's host projection publication is unchanged.
+
+First headset test of the call-scope patch failed: real Streamline viewport
+inputs were not recognized because the local ABI wrapper's type GUID was zero.
+Corrected ViewportHandle initialization to the official GUID/version, and
+retained multiple in-flight frame cameras rather than overwriting each viewport
+with only its newest frame. The production-header GUID test fails on the old
+wrapper and passes on the correction. Do not describe the first build as working.
+
+Expanded --cyberpunk-shared-gaze regression passes asymmetric optical centers,
+reversed/repeated view order, non-square output, frame/viewport/age rejection,
+nested scope restoration and thread isolation. Headset confirmation pending.
+After loading gameplay, verify BOTH foveated regions follow eye movement;
+support logs should show fresh=1, reject=0 and the appropriate cameraVP for
+each native view. This does not fix or validate the port's native framegen.
+
 Optional shared gaze for the standalone triple-DLSS5 branch
 ----------------------------------------------------------
 This branch restores the optional shared-gaze compatibility mode removed by

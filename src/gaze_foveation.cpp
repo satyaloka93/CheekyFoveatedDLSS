@@ -647,7 +647,7 @@ bool calculate_coordinated_crop(
         }
         // Deliberately host-scoped: never borrow another game's/eye's camera.
         float camera_age_ms = camera.valid ? 0.F : -1.F;
-        unsigned camera_viewport = UINT32_MAX;
+        unsigned camera_viewport = camera.valid ? active_gaze_projection.viewport : UINT32_MAX;
         if (!camera.valid && GetModuleHandleW(L"CyberpunkVR_Stereo.dll")) {
             const SharedCamera* latest{};
             for (const auto& entry : shared_cameras) {

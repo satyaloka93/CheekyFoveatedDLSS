@@ -1,4 +1,4 @@
-Cheeky 0.5.5 - NR bridge preview 2 (2026-10-18)
+Cheeky 0.5.5 - NR bridge preview 3 (2026-10-20)
 Based on Chtiblue's triple-DLSS5 branch, with this fork's shared-gaze compatibility.
 
 UPGRADE PACKAGES, NOT FRESH INSTALLERS
@@ -30,10 +30,26 @@ Extract the Standalone-Upgrade ZIP alongside the GAME executable, merging its
 CheekyFoveatedDLSS folder. Replace Host.dll and Runtime.dll together. Do not
 replace your dxgi.dll, version.dll, ASI loader, NVIDIA DLLs or INI. Open your
 existing Cheeky menu key (F11 in our Cyberpunk installation; upstream default F8).
+For a missing menu INI, run Setup-CheekyMenu.ps1 from the extracted package:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Setup-CheekyMenu.ps1
+It creates CheekyFoveatedDLSS\CheekyOverlay.ini with MenuKey=122 (F11) only
+when missing; existing bindings are preserved. Or copy defaults\CheekyOverlay.ini
+beside the host DLL yourself. See OVERLAY-MENU.txt for exact paths, key numbers,
+General -> Change menu key, and focus/troubleshooting instructions.
+The INI template deliberately lives in defaults so extracting an upgrade does
+not overwrite an existing binding. UEVR users do not need this INI.
 
 WHAT CHANGED
 ============
-Local update (2026-10-19; not a newly published release):
+Preview 3 (2026-10-20):
+- Cyberpunk VR camera/Streamline routing compatibility updates; see
+  CYBERPUNK-STANDALONE.txt. No VR port or layer changes are bundled.
+- Standalone menu INI setup, clear key-binding instructions and automatic
+  overlay diagnostics, including failures before the menu opens.
+- Scene resets propagate to every NR pass; toggling F5 reuse resets history.
+  UEVR now exposes the experimental F5 reuse switch when supported.
+- Experimental motion-reprojected correction reuse and its test are not
+  included. F5 internal-feature reuse and its benchmark remain available.
 - Effect strength groups NR intensity and NR output blend together. Intensity
   changes what NR generates; blend controls how much of that result is shown.
   Blend 0% hides the result but does not stop NR processing. Start comparisons

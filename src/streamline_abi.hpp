@@ -114,6 +114,13 @@ struct SlDlssOptions : SlBaseStructure {
 };
 
 struct SlViewportHandle : SlBaseStructure {
+    // sl_core_types.h ViewportHandle::s_structType, NOT an all-zero base.
+    // Lower-hook dispatch identifies this structure among arbitrary inputs.
+    SlViewportHandle() {
+        struct_type = {0x171b6435, 0x9b3c, 0x4fc8,
+            {0x99, 0x94, 0xfb, 0xe5, 0x25, 0x69, 0xaa, 0xa4}};
+        struct_version = 1;
+    }
     std::uint32_t value{0xFFFFFFFFU};
 };
 

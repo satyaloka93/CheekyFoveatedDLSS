@@ -1,0 +1,73 @@
+CHEEKY STANDALONE / CYBERPUNK VR: OPENING THE MENU
+================================================
+These instructions are for Cheeky's desktop overlay, not the VR port's F10
+menu, ReShade, or UEVR's menu. Focus the game's desktop window before pressing
+the key. You can use the desktop mouse to navigate Cheeky.
+
+FIRST SETUP (game closed)
+-------------------------
+Extract the Standalone upgrade beside Cyberpunk2077.exe (normally bin\x64).
+From that folder run:
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Setup-CheekyMenu.ps1
+
+This creates CheekyFoveatedDLSS\CheekyOverlay.ini with F11 ONLY if no file
+exists. It preserves an existing binding and changes no game/NR/layer settings.
+No administrator rights are normally needed. This is menu setup, not a loader
+installer; a working Standalone installation is still required.
+
+Without running a script: copy defaults\CheekyOverlay.ini into the
+CheekyFoveatedDLSS folder, next to CheekyFoveatedDLSSHost.dll. Do not overwrite
+an existing INI unless you intentionally want to replace its binding.
+
+Launch the game, focus its desktop window, and press F11 to open/close Cheeky.
+If you kept an existing INI, its saved key takes precedence. If you did neither
+setup method and no INI exists, the runtime falls back to F8.
+
+CHANGE THE KEY
+--------------
+In Cheeky: General -> Change menu key, then press the desired keyboard key.
+The binding saves automatically. "Reset to F8" restores the runtime default,
+NOT the F11 value supplied by this package.
+
+Or close the game and edit:
+  <game executable folder>\CheekyFoveatedDLSS\CheekyOverlay.ini
+
+  [Overlay]
+  MenuKey=122
+
+Use a decimal Windows virtual-key number:
+  F8=119   F10=121   F11=122   F12=123   Insert=45
+Use ONE keyboard key, not "F11", "Ctrl+F11", or a controller button name.
+Do not use Escape or a modifier key alone. Choose a key unused by the game
+and other overlays; F10 belongs to the Cyberpunk VR port menu in our setup.
+On keyboards with media-function keys, Fn+F11 may be needed.
+
+If no menu appears, check the exact path (not the game root or profile folder),
+ensure the filename is not CheekyOverlay.ini.txt, restart after manual edits,
+and verify that CheekyFoveatedDLSSHost.dll loaded. Changing the INI cannot fix
+a missing loader or unloaded host. The overlay hotkey only works with game focus.
+
+LOGS WHEN THE MENU DOES NOT APPEAR
+---------------------------------
+You do not need to open the menu or enable a debug checkbox. After reproducing
+the problem, close the game and send these files from the folder beside the
+host DLL:
+  CheekyFoveatedDLSS\CheekyFoveatedDLSS-Host.log
+  CheekyFoveatedDLSS\CheekyFoveatedDLSS-Standalone.log
+  CheekyFoveatedDLSS\CheekyOverlay.ini (if present)
+
+The Host log records startup, the selected INI path and effective MenuKey when
+input attaches, input-handler/save failures, overlay initialization failures,
+focus/window/queue rejection reasons, and menu-open/close status. GPU setup
+errors include the failing operation and error code. Repeated detailed errors
+are rate-limited to avoid flooding disk.
+Also report the key you pressed and whether the desktop game window had focus.
+Check file modification times: an old log is not evidence of this launch.
+If no fresh Host log exists, the host may not have loaded/started, or its folder
+may not be writable. Send the loader/proxy log too, if available. An unloaded
+DLL cannot write its own diagnostic log; this does not prove a hotkey problem.
+
+UEVR
+----
+The UEVR plugin uses UEVR -> LuaLoader -> Cheeky Foveated DLSS. This overlay INI
+does not change the UEVR menu binding and is not needed for the UEVR package.

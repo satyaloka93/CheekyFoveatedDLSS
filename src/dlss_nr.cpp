@@ -1269,7 +1269,8 @@ bool evaluate_dlss_nr_internal(
         );
 
     auto* const parameters = view.parameters;
-    const auto signature = dlss_nr_history_signature(nr_settings_signature(settings, region), {
+    const auto signature = dlss_nr_history_signature(nr_settings_signature(settings, region) ^
+        (settings.nr_vit_reuse ? 0x4655000000000001ULL : 0ULL), {
         frame.input_width, frame.input_height, frame.output_width, frame.output_height,
         processing_width, processing_height,
         frame.depth_width, frame.depth_height, frame.motion_width, frame.motion_height,
@@ -1609,7 +1610,7 @@ bool evaluate_dlss_nr_internal(
         // IDs are small per-eye handles; keeping the namespace separate avoids
         // sharing temporal history between pass 1 and pass 2.
         second_frame.view_id = frame.view_id | kNrPass2ViewBit;
-        second_frame.reset = false;
+        // Preserve game/scene reset across every independent pass history.
         const auto second_settings = nr_settings_for_extra_pass(settings, 2U);
         if (!evaluate_dlss_nr_internal(second_frame, second_settings, false)) {
             trace_event(
@@ -1645,7 +1646,7 @@ bool evaluate_dlss_nr_internal(
         }
         auto third_frame = frame;
         third_frame.view_id = frame.view_id | kNrPass3ViewBit;
-        third_frame.reset = false;
+        // Preserve game/scene reset across every independent pass history.
         const auto third_settings = nr_settings_for_extra_pass(settings, 3U);
         if (!evaluate_dlss_nr_internal(third_frame, third_settings, false)) {
             trace_event(
