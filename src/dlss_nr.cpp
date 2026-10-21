@@ -1781,7 +1781,7 @@ const char* dlss_nr_state_name(const DlssNrState state) noexcept {
     switch (state) {
     case DlssNrState::waiting: return "Waiting for a compatible DLSS frame";
     case DlssNrState::disabled: return "Disabled";
-    case DlssNrState::runtime_missing: return "nvngx_dlssnr.dll could not load beside the processing DLL or game executable; see log";
+    case DlssNrState::runtime_missing: return "Selected NR DLL could not load (Current: nvngx_dlssnr.dll; Previous: nvngx_dlssnr_old.dll); place it beside the runtime or game executable, see log";
     case DlssNrState::runtime_failed: return "DLSS-NR runtime initialization failed";
     case DlssNrState::unsupported_resources: return "Unsupported or missing depth, motion, or output resource";
     case DlssNrState::feature_failed: return "DLSS-NR feature 18 creation failed";

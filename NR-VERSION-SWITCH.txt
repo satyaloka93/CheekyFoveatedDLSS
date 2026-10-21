@@ -1,0 +1,62 @@
+NR VERSION SWITCH (Standalone and UEVR)
+======================================
+This changes the library and matching NR settings on the NEXT GAME LAUNCH.
+It never unloads or replaces a DLL while rendering. Reinjecting UEVR is not a
+game restart. Current is unchanged by default.
+
+With the game closed, place your legitimately obtained old library named
+nvngx_dlssnr_old.dll beside CheekyFoveatedDLSSRuntime.dll (preferred) or beside
+the game executable. Keep the current nvngx_dlssnr.dll in its existing place.
+Do NOT install renodx-dlss_old.addon64: it is a reference for feature research,
+not a second renderer required by Cheeky. NVIDIA libraries are not bundled.
+
+In Cheeky's DLSS-NR page, choose Use previous NR next launch, then fully exit
+and restart the game. Check Loaded NR DLL path/version AND successful NR
+evaluations. The supplied old DLL is 310.8.0.0. Missing/invalid Previous never
+silently falls back to Current; NR logs the selected paths and load errors.
+Switch back with Use current NR next launch and another game restart.
+
+CheekyRuntime.ini [NR] PreviousRuntime=0/1 stores the next-launch choice.
+With the game CLOSED, edit or add this section, preserving other sections:
+
+  [NR]
+  PreviousRuntime=1
+
+Use 1 for Previous (old); use 0 for Current (new). Missing means Current.
+This is DLSS-NR only, not the game's DLSS-SR selection or network Preset A/B.
+Current/Previous are filename slots, not automatic version detection/update.
+The Previous menu is intended for the verified 310.8.0.0 library; Current
+network/F5 guidance targets 310.9.16.0, not arbitrary future versions.
+
+Standalone config location:
+  <game executable folder>\CheekyFoveatedDLSS\CheekyRuntime.ini
+Cyberpunk example:
+  Cyberpunk 2077\bin\x64\CheekyFoveatedDLSS\CheekyRuntime.ini
+UEVR config location (profile's persistent directory):
+  %APPDATA%\UnrealVRMod\<game-executable-name>\CheekyRuntime.ini
+For standard UEVR layout, place old DLL beside the runtime at:
+  <profile>\plugins\CheekyFoveatedDLSS\nvngx_dlssnr_old.dll
+The DLL directory and INI directory are different for UEVR.
+
+CheekyNR-current.ini and CheekyNR-previous.ini store independent NR tuning in
+the same configuration directory as CheekyFoveatedDLSS.ini. Although these
+use the full settings schema, ONLY Nr* keys are applied from the profiles.
+SR, gaze and integration settings continue to come from the main INI.
+The menu always edits THIS SESSION's NR profile, not the pending version.
+
+The first Current launch retains existing tuning. First Previous launch uses
+safe NR defaults, with NR OFF: enable NR and tune it after restarting.
+Subsequent launches restore that version's saved tuning. Back up all three
+settings files plus CheekyRuntime.ini before manual edits. Once profiles exist,
+edit NR values in the selected profile, not only the main INI.
+
+Old 310.8 uses network Default (0); its reference addon hardcodes this value.
+Model A/B/C are still appearance choices. Network preset A/B and F5 controls
+and corresponding benchmarks are disabled in the Previous menu. F5 also has
+an independent exact-version guard in the renderer. Do not manually import
+310.9 network/reuse values into the Previous profile.
+
+Tests use a fake NGX library for routing and GPU contracts, not NVIDIA model
+quality. Successful routing tests do not prove old-DLL game compatibility.
+Cyberpunk user reported the switch working; logs confirm 310.8.0.0 loaded.
+The equivalent old-DLL UEVR gameplay test remains pending.

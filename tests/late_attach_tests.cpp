@@ -16,6 +16,9 @@
 using namespace cheeky::foveated_dlss;
 using Microsoft::WRL::ComPtr;
 namespace {
+const wchar_t* nr_fixture_filename() {
+    return GetEnvironmentVariableW(L"CHEEKY_TEST_PREVIOUS_NR", nullptr, 0) ? L"nvngx_dlssnr_old.dll" : L"nvngx_dlssnr.dll";
+}
 void require(bool value,const char* why) { if(!value) throw std::runtime_error(why); }
 void check(HRESULT hr,const char* why) { require(SUCCEEDED(hr),why); }
 template<class T> T proc(HMODULE module,const char* name) {
@@ -343,7 +346,7 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
                 f.viewport.value,f.tags.data(),4), "NR scope did not restore original viewport tags");
     };
     evaluate(0); // Establish the coordinated region without relying on timing.
-    nr = GetModuleHandleW(L"nvngx_dlssnr.dll");
+    nr = GetModuleHandleW(nr_fixture_filename());
     require(nr != nullptr, "Hook fixture loaded its local fake NR runtime");
     proc<void(*)(void(*)(const NgxParameters*))>(nr,"CheekyFakeObserve")(&observe_nr);
     proc<void(*)(void(*)(const NgxParameters*))>(nr,"CheekyFakeObserveCreated")(&observe_nr_created);
@@ -1172,7 +1175,7 @@ void verify_realvr_test(CheekyUEVRSnapshotFn get, void (*command)(const char*)) 
         require(afw_full_calls==102,"RR must preserve one VR core call per frame");
         wchar_t runtime_path[32768]{};
         require(GetModuleFileNameW(GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll"),runtime_path,32768),"Locate NR fixture");
-        const auto nr=LoadLibraryW((std::filesystem::path(runtime_path).parent_path()/"nvngx_dlssnr.dll").c_str());
+        const auto nr=LoadLibraryW((std::filesystem::path(runtime_path).parent_path()/nr_fixture_filename()).c_str());
         require(nr!=nullptr,"Load NR for RR");
         const auto nr_evals=proc<Counter>(nr,"CheekyFakeEvaluates");
         proc<void(*)(bool)>(nr,"CheekyFakeCopyNrColor")(true);
@@ -1365,7 +1368,7 @@ void verify_afw_gaze_history(CheekyUEVRSnapshotFn get, void (*command)(const cha
     };
     const auto codecs = counter("codec_creations"), borders = counter("border_creations");
     const auto sr_allocations = f.creates();
-    const auto nr_module = GetModuleHandleW(L"nvngx_dlssnr.dll");
+    const auto nr_module = GetModuleHandleW(nr_fixture_filename());
     require(nr_module != nullptr, "NR fixture is resident");
     const auto nr_creates = proc<Counter>(nr_module, "CheekyFakeCreates");
     const auto nr_allocations = nr_creates();
@@ -1421,7 +1424,7 @@ void verify_afw_nr(CheekyUEVRSnapshotFn get, void (*command)(const char*)) {
     auto& f = fixture();
     wchar_t runtime_path[32768]{};
     require(GetModuleFileNameW(GetModuleHandleW(L"CheekyFoveatedDLSSRuntime.dll"), runtime_path, 32768), "Locate isolated AFW NR fixture");
-    const auto nr = LoadLibraryW((std::filesystem::path(runtime_path).parent_path() / "nvngx_dlssnr.dll").c_str());
+    const auto nr = LoadLibraryW((std::filesystem::path(runtime_path).parent_path() / nr_fixture_filename()).c_str());
     require(nr != nullptr, "Load isolated NR snippet");
     proc<void(*)(void(*)(const NgxParameters*))>(nr, "CheekyFakeObserve")(observe_nr);
     proc<void(*)(void(*)(const NgxParameters*))>(nr, "CheekyFakeObserveCreated")(observe_nr_created);
@@ -1759,7 +1762,7 @@ void verify_late_attach_test(CheekyUEVRSnapshotFn get, void (*command)(const cha
             f.complete_sl_metadata = true;
         }
         proc<void(*)(void(*)(const NgxParameters*))>(f.ngx, "CheekyFakeObserve")(&observe_sr);
-        proc<void(*)(void(*)(const NgxParameters*))>(GetModuleHandleW(L"nvngx_dlssnr.dll"), "CheekyFakeObserve")(&observe_nr);
+        proc<void(*)(void(*)(const NgxParameters*))>(GetModuleHandleW(nr_fixture_filename()), "CheekyFakeObserve")(&observe_nr);
         const auto evaluate = [&] {
             sr_inputs.clear(); evaluation_order.clear();
             const auto original = f.params.values;

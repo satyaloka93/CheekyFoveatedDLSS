@@ -1,4 +1,4 @@
-Cheeky 0.5.5 - NR bridge preview 3 (2026-10-20)
+Cheeky 0.5.5 - NR bridge preview 4 (2026-10-21)
 Based on Chtiblue's triple-DLSS5 branch, with this fork's shared-gaze compatibility.
 
 UPGRADE PACKAGES, NOT FRESH INSTALLERS
@@ -41,6 +41,12 @@ not overwrite an existing binding. UEVR users do not need this INI.
 
 WHAT CHANGED
 ============
+Preview 4: Current/Previous NR DLL selector in standalone and UEVR menus,
+with separate NR profiles and full-game-restart switching. See
+NR-VERSION-SWITCH.txt for DLL placement and menu/INI instructions.
+No NVIDIA DLLs or personal profiles are included. First Previous launch
+defaults NR OFF; enable it after restarting. SR/gaze settings remain shared.
+
 Preview 3 (2026-10-20):
 - Cyberpunk VR camera/Streamline routing compatibility updates; see
   CYBERPUNK-STANDALONE.txt. No VR port or layer changes are bundled.

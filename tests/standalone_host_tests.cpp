@@ -37,6 +37,8 @@ std::string snapshot(CheekyHostSnapshotFn get) {
 int main(int argc,char** argv) {
     try {
         const std::string mode=argc>1 ? argv[1] : "dx12";
+        const bool previous_nr=mode=="dx12-previous-nr";
+        if(previous_nr) SetEnvironmentVariableW(L"CHEEKY_TEST_PREVIOUS_NR",L"1");
         const bool pipeline_capture=mode=="dx12-capture";
         if(pipeline_capture) SetEnvironmentVariableW(L"CHEEKY_TEST_NR_CAPTURE",L"1");
         const bool dx11=mode.find("dx11")!=std::string::npos;
@@ -52,6 +54,10 @@ int main(int argc,char** argv) {
         for (const auto* name : {L"CheekyFoveatedDLSSHost.dll",L"CheekyFoveatedDLSSRuntime.dll"})
             std::filesystem::copy_file(bin/"CheekyFoveatedDLSS"/name,root/name);
         if(!chained_table)std::filesystem::copy_file(bin/"test-fixtures"/"nvngx_dlss.dll",root/"nvngx_dlssnr.dll");
+        if(previous_nr) {
+            std::filesystem::copy_file(bin/"test-fixtures"/"nvngx_dlss.dll",root/"nvngx_dlssnr_old.dll");
+            std::ofstream(root/"CheekyRuntime.ini") << "[NR]\nPreviousRuntime=1\n";
+        }
         // Exercise the direct DX11 route here. A separate suite exercises its
         // optional DX12 transport and NR; settings must not select it implicitly.
         std::ofstream(root/"CheekyFoveatedDLSS.ini") << "[CheekyFoveatedDLSS]\nD3D11D3D12Transport=false\n";
@@ -98,6 +104,8 @@ int main(int argc,char** argv) {
             std::puts("PASS: chained factory vtable preserves creation, presentation and resize");return 0;
         }
         frame();
+        require(snapshot(get).find(previous_nr ? "\"nr_previous_active\":true" : "\"nr_previous_active\":false") != std::string::npos,
+            "Startup selected NR runtime/profile");
         auto state=snapshot(get);
         require(state.find("\"ready\":true")!=state.npos,"Graphics independently discovered");
         require(state.find(host==2 ? "\"host\":\"optiscaler\"" : "\"host\":\"standalone\"")!=state.npos,"Correct host diagnostics");
@@ -106,6 +114,8 @@ int main(int argc,char** argv) {
         Sleep(300);
         if(realvr) verify_realvr_test(get,command);
         else verify_late_attach_test(get,command,frame);
+        if(previous_nr) require(snapshot(get).find("nvngx_dlssnr_old.dll") != std::string::npos,
+            "Previous selection must actually load old filename, not current fallback");
         if(pipeline_capture) {
             unsigned metadata_count{};
             for(unsigned i=0;i<100 && metadata_count<2;++i){

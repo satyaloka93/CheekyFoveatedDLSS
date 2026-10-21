@@ -239,7 +239,9 @@ local function extra_nr_pass(pass)
         if status.settings[prefix .. suffix] ~= nil then combo(label .. id, prefix .. suffix, options) end
     end
     scale("Working scale", "WorkingScale", 0.1, 1)
+    imgui.begin_disabled(status.nr_previous_active == true)
     nr_choice("NR network preset", prefix .. "Preset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
+    imgui.end_disabled()
     network_help(draft[prefix .. "Preset"])
     nr_choice("NR appearance mode", prefix .. "Style", {[0]="Model A",[1]="Model B",[2]="Model C"})
     appearance_help(draft[prefix .. "Style"])
@@ -584,6 +586,12 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
     end
 
     if imgui.tree_node("DLSS-NR (experimental)") then
+        text("NR profile this session: " .. (status.nr_previous_active and "Previous" or "Current"))
+        text("Next launch: " .. (status.nr_previous_next and "Previous" or "Current"))
+        if imgui.button("Use current NR next launch") then send("nr_runtime_current") end
+        if imgui.button("Use previous NR next launch") then send("nr_runtime_previous") end
+        text("Restart the GAME to switch DLL/profile. Previous needs nvngx_dlssnr_old.dll beside the runtime or game executable. First Previous launch has NR off/default tuning. SR/gaze remain shared.")
+        if status.nr_previous_active ~= status.nr_previous_next then text("NR version change pending: fully exit and restart the game.") end
         local nr = status.nr_details or {}
         text("NR runtime state: " .. tostring(status.nr or "Unavailable"))
         text("NR DLL version: " .. ((nr.runtime_version and nr.runtime_version ~= "") and nr.runtime_version or "Not reported yet"))
@@ -631,8 +639,11 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     text("Rendering order: Unavailable in this runtime")
                 end
                 slider("NR working scale", "NrWorkingScale", 0.1, 1)
+                imgui.begin_disabled(status.nr_previous_active == true)
                 if status.settings.NrVitReuse ~= nil then check("Experimental F5 ViT reuse", "NrVitReuse") end
                 nr_choice("NR network preset", "NrPreset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
+                imgui.end_disabled()
+                if status.nr_previous_active then text("Previous 310.8: one network (Default); F5 unavailable. Appearance Model A/B/C remains separate.") end
                 network_help(draft.NrPreset)
                 nr_choice("NR appearance mode", "NrStyle", {[0]="Model A",[1]="Model B",[2]="Model C"})
                 appearance_help(draft.NrStyle)

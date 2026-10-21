@@ -1,5 +1,6 @@
 #include "runtime_api.hpp"
 #include "settings_io.hpp"
+#include "nr_profiles.hpp"
 #include "processing_owner.hpp"
 #include "late_attach_tests.hpp"
 #include "runtime_search.hpp"
@@ -84,6 +85,25 @@ void wait_gpu(ID3D12Device* device, ID3D12CommandQueue* queue) {
     auto result = WaitForSingleObject(event, 10000); CloseHandle(event); require(result == WAIT_OBJECT_0, "GPU timeout");
 }
 void settings_tests(const std::filesystem::path& root) {
+    {
+        const auto profiles = root / "nr-profile-test";
+        std::filesystem::create_directories(profiles);
+        Settings current; current.nr_intensity = .37F; current.nr_enabled = true;
+        std::string error;
+        require(read_nr_profile(profiles, false, current, error) && current.nr_intensity == .37F,
+            "First current launch must retain existing NR tuning");
+        require(write_settings_file(nr_profile_path(profiles, false), current, error), "Save current NR profile");
+        Settings previous = current;
+        require(read_nr_profile(profiles, true, previous, error) && !previous.nr_enabled,
+            "First previous launch must start with safe NR defaults");
+        previous.nr_intensity = .62F; previous.enabled = !current.enabled;
+        require(write_settings_file(nr_profile_path(profiles, true), previous, error), "Save previous NR profile");
+        const bool shared_enabled = current.enabled;
+        require(read_nr_profile(profiles, true, current, error) && current.nr_intensity == .62F && current.enabled == shared_enabled,
+            "Previous NR profile must not overwrite shared SR/gaze settings");
+        require(read_nr_profile(profiles, false, current, error) && current.nr_intensity == .37F,
+            "Returning to current must restore its NR tuning");
+    }
     Settings s; require(s.d3d12_lower_hook, "Lower hook is the default");
     for (const auto prefix : {"Nr", "NrPass2", "NrPass3"}) {
         for (const auto suffix : {"ColorPipeline", "SignalEncoding", "ScalingDomain", "ExposureMode"}) {
@@ -646,6 +666,15 @@ int main(int argc, char** argv) {
         require(field(snapshot(get),"destroyed")>=field(before,"destroyed")+3,"Resource and list lifetime sentinels");
         }
         command("1\n5\nreport");
+        command("1\n900\nnr_runtime_previous");
+        require(received.find("\"nr_previous_active\":false") != received.npos &&
+            received.find("\"nr_previous_next\":true") != received.npos,
+            "NR switch must change next launch, never active runtime");
+        require(GetPrivateProfileIntW(L"NR", L"PreviousRuntime", 0, (root/L"CheekyRuntime.ini").c_str()) == 1,
+            "NR selection must persist");
+        command("1\n901\nnr_runtime_current");
+        require(received.find("\"nr_previous_next\":false") != received.npos,
+            "Pending NR switch can be cancelled");
         for (int i=0;i<500 && !std::filesystem::exists(root/"CheekyFoveatedDLSS-diagnostics.json");++i) Sleep(10);
         require(std::filesystem::exists(root/"CheekyFoveatedDLSS-diagnostics.json"),"Asynchronous report");
         for (int i=0;i<500 && snapshot(get).find("\"busy\":true")!=std::string::npos;++i) Sleep(10);

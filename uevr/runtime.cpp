@@ -1,6 +1,8 @@
 #include "vulkan_backend.hpp"
 #include "runtime_api.hpp"
 #include "settings_io.hpp"
+#include "nr_profiles.hpp"
+#include "nr_runtime_module.hpp"
 #include "frame_cadence.hpp"
 #include "support_bundle.hpp"
 #include "eye_calibration_capture.hpp"
@@ -41,6 +43,7 @@ struct State {
     std::filesystem::path directory, config;
     HANDLE log{INVALID_HANDLE_VALUE}, save_event{}, owner{};
     bool started{}, graphics_ready{}, failed{};
+    bool nr_previous{}, nr_previous_next{};
     std::uint32_t renderer{};
     CheekyRuntimeHost host{CheekyRuntimeHost::uevr};
     void* observed_device{};
@@ -105,6 +108,8 @@ std::string snapshot_locked(State& s) {
         << "\",\"settings\":" << settings_json(configured_settings())
         << ",\"setting_groups\":" << setting_groups_json()
         << ",\"nr_pipeline_capture\":\"" << json_escape(nr_pipeline_capture_status()) << "\""
+        << ",\"nr_previous_active\":" << s.nr_previous
+        << ",\"nr_previous_next\":" << s.nr_previous_next
         << ",\"d3d12_lower_hook_active\":" << d3d12_lower_hook_enabled()
         << ",\"d3d12_hook_restart_required\":" << d3d12_hook_restart_required(configured_settings().d3d12_lower_hook)
         << ",\"afw_experiment\":{\"enabled\":" << afw.enabled
@@ -284,11 +289,12 @@ DWORD WINAPI persistence_worker(void*) {
         WaitForSingleObject(s.save_event, INFINITE);
         try {
             if (s.save_requested.exchange(false)) {
-                Settings settings; std::uint64_t revision;
-                { std::lock_guard lock(s.mutex); settings = s.nr_comparison ? s.nr_comparison_original : configured_settings(); revision = s.revision; }
-                std::string error;
-                const auto success = write_settings_file(s.config, settings, error);
                 std::lock_guard lock(s.mutex);
+                const auto settings = s.nr_comparison ? s.nr_comparison_original : configured_settings();
+                const auto revision = s.revision;
+                std::string error;
+                const auto success = write_settings_file(s.config, settings, error) &&
+                    write_settings_file(nr_profile_path(s.directory, s.nr_previous), settings, error);
                 if (success) s.saved_revision = revision;
                 else { s.message = error; log_error(error.c_str()); }
             }
@@ -429,6 +435,20 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Start(const CheekyRuntimeSta
                     s.failed = true; log_error(s.message.c_str()); return false;
                 }
             }
+            s.nr_previous = s.nr_previous_next = GetPrivateProfileIntW(L"NR", L"PreviousRuntime", 0,
+                (s.directory / L"CheekyRuntime.ini").c_str()) == 1;
+            std::string profile_error;
+            // Preserve current tuning before the first ever switch to Previous.
+            if (s.nr_previous && !std::filesystem::exists(nr_profile_path(s.directory, false)) &&
+                !write_settings_file(nr_profile_path(s.directory, false), settings, profile_error)) {
+                s.failed = true; s.message = profile_error; log_error(s.message.c_str()); return false;
+            }
+            if (!read_nr_profile(s.directory, s.nr_previous, settings, profile_error)) {
+                s.failed = true; s.message = "NR profile: " + profile_error; log_error(s.message.c_str()); return false;
+            }
+            nr_previous_runtime.store(s.nr_previous);
+            trace_event("NR profile=%ls; selected DLL=%s", nr_profile_path(s.directory, s.nr_previous).c_str(),
+                s.nr_previous ? "nvngx_dlssnr_old.dll" : "nvngx_dlssnr.dll");
             update_settings(settings); s.revision = 1;
             set_eye_calibration_learning(settings.eye_calibration_learned_method,
                 settings.eye_calibration_learned_signature, settings.eye_calibration_learned_sessions);
@@ -592,6 +612,21 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
             s.message = "Finish or cancel NR comparison before changing settings"; return false;
         }
         if (action == "nr_comparison_set" && !s.nr_comparison) return false;
+        if (action == "nr_runtime_current" || action == "nr_runtime_previous") {
+            std::string error;
+            if (!write_settings_file(nr_profile_path(s.directory, s.nr_previous), configured_settings(), error) ||
+                !WritePrivateProfileStringW(L"NR", L"PreviousRuntime",
+                    action == "nr_runtime_previous" ? L"1" : L"0", (s.directory / L"CheekyRuntime.ini").c_str())) {
+                s.message = "Could not save NR runtime selection/profile: " + error;
+                log_error(s.message.c_str()); return false;
+            }
+            s.nr_previous_next = action == "nr_runtime_previous";
+            s.message = s.nr_previous == s.nr_previous_next ? "NR runtime selection unchanged" :
+                "NR version saved for next launch. Fully exit and restart the game; current NR stays active.";
+            trace_event("%s Next NR DLL=%s", s.message.c_str(),
+                s.nr_previous_next ? "nvngx_dlssnr_old.dll" : "nvngx_dlssnr.dll");
+            s.applied_request = id; return true;
+        }
         if (action == "calibration_enable" || action == "calibration_disable") {
             eye_calibration_enable(action == "calibration_enable" && !configured_settings().manual_stereo_mapping); return true;
         }

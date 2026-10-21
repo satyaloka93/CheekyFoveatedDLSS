@@ -265,7 +265,7 @@ void draw_gaze(Settings& s) {
     }
 }
 
-void draw_extra_nr_pass(Settings& s, int pass) {
+void draw_extra_nr_pass(Settings& s, int pass, bool previous_nr) {
     const bool second = pass == 2;
     ImGui::PushID(pass);
     if (ImGui::TreeNode(second ? "DLSS5 Pass 2 - Settings" : "DLSS5 Pass 3 - Settings")) {
@@ -279,7 +279,9 @@ void draw_extra_nr_pass(Settings& s, int pass) {
         float& motion_x = second ? s.nr_pass2_motion_scale_x_multiplier : s.nr_pass3_motion_scale_x_multiplier;
         float& motion_y = second ? s.nr_pass2_motion_scale_y_multiplier : s.nr_pass3_motion_scale_y_multiplier;
         slider("Working scale", working, .1F, 1.0F);
+        ImGui::BeginDisabled(previous_nr);
         nr_choice("NR network preset", preset_value, true);
+        ImGui::EndDisabled();
         ImGui::TextWrapped("%s", nr_network_help(preset_value));
         ImGui::TextWrapped("%s", nr_network_version_help);
         nr_choice("NR appearance mode", style, false);
@@ -305,7 +307,7 @@ void draw_extra_nr_pass(Settings& s, int pass) {
     ImGui::PopID();
 }
 
-void draw_nr(Settings& s) {
+void draw_nr(Settings& s, bool previous_nr) {
     ImGui::Checkbox("Enable DLSS-NR", &s.nr_enabled);
     ImGui::SeparatorText("Size and shape");
     ImGui::Checkbox("Foveated DLSS-NR", &s.nr_foveated);
@@ -334,9 +336,12 @@ void draw_nr(Settings& s) {
     ImGui::SeparatorText("DLSS5 Pass 1 - Settings");
     combo("Rendering order", s.nr_processing_order, "After upscaling\0Before upscaling (experimental)\0");
     slider("Working scale", s.nr_working_scale, .1F, 1.0F);
+    ImGui::BeginDisabled(previous_nr);
     ImGui::Checkbox("Experimental F5 ViT reuse", &s.nr_vit_reuse);
     ImGui::TextWrapped("Experimental speed option: reuses part of NR between frames. May lag during motion. Requires native DX12 and NR 310.9.16.0; otherwise normal NR runs.");
     nr_choice("NR network preset", s.nr_preset, true);
+    ImGui::EndDisabled();
+    if (previous_nr) ImGui::TextWrapped("Previous 310.8 uses one network: keep Default. F5 reuse requires 310.9.16. Appearance Model A/B/C remains separate.");
     ImGui::TextWrapped("%s", nr_network_help(s.nr_preset));
     ImGui::TextWrapped("%s", nr_network_version_help);
     nr_choice("NR appearance mode", s.nr_style, false);
@@ -399,8 +404,8 @@ void draw_nr(Settings& s) {
         ImGui::TreePop();
     }
     if (s.nr_enabled && s.nr_foveated && s.nr_second_pass) {
-        draw_extra_nr_pass(s, 2);
-        if (s.nr_third_pass) draw_extra_nr_pass(s, 3);
+        draw_extra_nr_pass(s, 2, previous_nr);
+        if (s.nr_third_pass) draw_extra_nr_pass(s, 3, previous_nr);
     }
 }
 
@@ -915,7 +920,8 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
         if (!r.message.empty()) ImGui::TextWrapped("%s", r.message.c_str());
         draw_nr_screenshot(r, runtime);
         ImGui::BeginDisabled(nr_screenshot.active);
-        draw_nr_benchmark(r, runtime);
+        if (member(r.snapshot, "nr_previous_active") != "true") draw_nr_benchmark(r, runtime);
+        else ImGui::TextDisabled("Network A/B and F5 benchmarks require Current NR (310.9.16).");
         ImGui::BeginDisabled(nr_benchmark.active);
         draw_nr_comparison(r, runtime);
         if (ImGui::CollapsingHeader("NR same-frame pipeline capture")) {
@@ -983,6 +989,15 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
                 end_tab();
             }
             if (begin_tab("DLSS-NR")) {
+                const bool previous_nr = member(r.snapshot, "nr_previous_active") == "true";
+                const bool next_previous = member(r.snapshot, "nr_previous_next") == "true";
+                ImGui::Text("NR profile this session: %s", previous_nr ? "Previous" : "Current");
+                ImGui::Text("Next launch: %s", next_previous ? "Previous" : "Current");
+                if (ImGui::Button("Use current NR next launch")) command(r, runtime, "nr_runtime_current");
+                ImGui::SameLine();
+                if (ImGui::Button("Use previous NR next launch")) command(r, runtime, "nr_runtime_previous");
+                ImGui::TextWrapped("Restart the GAME to change DLL and NR profile. Previous requires nvngx_dlssnr_old.dll beside the runtime or game executable. First Previous launch starts with NR off and default tuning. SR/gaze settings stay shared.");
+                if (previous_nr != next_previous) warning("NR version change pending: fully exit and restart the game.");
                 diagnostic_line(r.snapshot, "Runtime state", "nr");
                 diagnostic_line(member(r.snapshot, "nr_details"), "Loaded NR DLL version", "runtime_version");
                 diagnostic_line(member(r.snapshot, "nr_details"), "Loaded NR DLL path", "runtime_path");
@@ -992,7 +1007,7 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
                     const auto reason = plain(member(member(r.snapshot, "nr_details"), "skip_reason"));
                     if (!reason.empty()) warning(reason.c_str());
                 }
-                draw_nr(r.draft);
+                draw_nr(r.draft, previous_nr);
                 if (ImGui::Button("Reset NR history / retry")) command(r, runtime, "reset_nr");
                 if (ImGui::Button("Reset NR defaults")) command(r, runtime, "defaults_nr");
                 if (ImGui::CollapsingHeader("Performance##nr", ImGuiTreeNodeFlags_DefaultOpen))

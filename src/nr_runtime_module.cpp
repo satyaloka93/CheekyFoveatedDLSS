@@ -142,7 +142,9 @@ NrRuntimeModule load_nr_runtime_module() noexcept {
     const auto length = GetModuleFileNameW(nullptr, executable.data(), static_cast<DWORD>(executable.size()));
     auto* slash = length && length < executable.size() ? std::wcsrchr(executable.data(), L'\\') : nullptr;
     if (slash) *slash = L'\0'; else executable[0] = L'\0';
-    const auto loaded = load_runtime_library(L"nvngx_dlssnr.dll", cached.directory.data(), executable.data(),
+    const auto previous = nr_previous_runtime.load();
+    trace_event("DLSS-NR runtime selection=%s (fixed until game exit)", previous ? "Previous" : "Current");
+    const auto loaded = load_runtime_library(previous ? L"nvngx_dlssnr_old.dll" : L"nvngx_dlssnr.dll", cached.directory.data(), executable.data(),
         [](const wchar_t* path, DWORD error) {
             trace_event("DLSS-NR runtime search path=%ls error=%lu", path, static_cast<unsigned long>(error));
         });
