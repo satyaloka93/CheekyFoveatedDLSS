@@ -67,6 +67,7 @@ std::atomic<std::uint32_t> nr_roundness_bits{};
 std::atomic<std::uint32_t> nr_transition_bits{0x3DA3D70AU};
 std::atomic<std::uint32_t> nr_working_scale_bits{0x3F800000U};
 std::atomic<bool> nr_vit_reuse{false};
+std::atomic<std::uint32_t> nr_vit_every{1}, nr_vit_every_plain{1};
 std::atomic<std::uint32_t> nr_preset{};
 std::atomic<std::uint32_t> nr_style{};
 std::atomic<std::uint32_t> nr_reconstruction{};
@@ -277,6 +278,8 @@ Settings configured_settings() noexcept {
     settings.nr_transition_width = load_float(nr_transition_bits);
     settings.nr_working_scale = load_float(nr_working_scale_bits);
     settings.nr_vit_reuse = nr_vit_reuse.load(std::memory_order_acquire);
+    settings.nr_vit_every = nr_vit_every.load(std::memory_order_acquire);
+    settings.nr_vit_every_plain = nr_vit_every_plain.load(std::memory_order_acquire);
     settings.nr_preset = nr_preset.load(std::memory_order_acquire);
     settings.nr_style = nr_style.load(std::memory_order_acquire);
     settings.nr_reconstruction = nr_reconstruction.load(std::memory_order_acquire);
@@ -479,6 +482,8 @@ void update_settings(const Settings& settings) noexcept {
         std::clamp(settings.nr_working_scale, 0.10F, 1.0F)
     );
     nr_vit_reuse.store(settings.nr_vit_reuse, std::memory_order_release);
+    nr_vit_every.store(settings.nr_vit_every == 2 ? 2U : 1U, std::memory_order_release);
+    nr_vit_every_plain.store(settings.nr_vit_every_plain == 2 ? 2U : 1U, std::memory_order_release);
     nr_preset.store(normalize_nr_preset(settings.nr_preset), std::memory_order_release);
     nr_style.store((std::min)(settings.nr_style, 2U), std::memory_order_release);
     nr_reconstruction.store(settings.nr_reconstruction == 1U ? 1U : 0U, std::memory_order_release);

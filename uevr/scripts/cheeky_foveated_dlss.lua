@@ -641,6 +641,11 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                 slider("NR working scale", "NrWorkingScale", 0.1, 1)
                 imgui.begin_disabled(status.nr_previous_active == true)
                 if status.settings.NrVitReuse ~= nil then check("Experimental F5 ViT reuse", "NrVitReuse") end
+                if status.settings.VitEvery ~= nil then
+                    combo("ViT FP8 cadence", "VitEvery", {[1]="1: Every frame (no reuse)",[2]="2: Alternate frames (reuse)"})
+                    combo("ViT FP16 cadence", "VitEveryPlain", {[1]="1: Every frame (no reuse)",[2]="2: Alternate frames (reuse)"})
+                    text("1/1 bypasses reuse/copies. 2 requires F5 master on. Restart the game to release previously retained GPU buffers.")
+                end
                 nr_choice("NR network preset", "NrPreset", {[0]="Default",[1]="Preset A",[2]="Preset B"})
                 imgui.end_disabled()
                 if status.nr_previous_active then text("Previous 310.8: one network (Default); F5 unavailable. Appearance Model A/B/C remains separate.") end

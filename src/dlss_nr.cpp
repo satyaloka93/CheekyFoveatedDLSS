@@ -1270,7 +1270,8 @@ bool evaluate_dlss_nr_internal(
 
     auto* const parameters = view.parameters;
     const auto signature = dlss_nr_history_signature(nr_settings_signature(settings, region) ^
-        (settings.nr_vit_reuse ? 0x4655000000000001ULL : 0ULL), {
+        (settings.nr_vit_reuse ? 0x4655000000000001ULL : 0ULL) ^
+        (std::uint64_t(settings.nr_vit_every) << 40) ^ (std::uint64_t(settings.nr_vit_every_plain) << 48), {
         frame.input_width, frame.input_height, frame.output_width, frame.output_height,
         processing_width, processing_height,
         frame.depth_width, frame.depth_height, frame.motion_width, frame.motion_height,
@@ -1451,7 +1452,8 @@ bool evaluate_dlss_nr_internal(
 
     const auto result = [&] {
         nr_vit::Scope reuse(settings.nr_vit_reuse && frame.route != DlssNrRoute::d3d11_transport,
-            diagnostics.runtime_version.data(), runtime.device, frame.command_list, frame.view_id, reset);
+            diagnostics.runtime_version.data(), runtime.device, frame.command_list, frame.view_id, reset,
+            settings.nr_vit_every,settings.nr_vit_every_plain);
         auto evaluated=runtime.evaluate_feature(frame.command_list, view.handle, parameters, nullptr);
         if(reuse.finish()!=0)evaluated=0xBAD00001U;
         if(!ngx_succeeded(evaluated)) {

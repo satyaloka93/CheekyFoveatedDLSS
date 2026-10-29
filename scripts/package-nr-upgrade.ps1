@@ -9,6 +9,7 @@ foreach($mode in @('UEVR','Standalone')) {
  New-Item -ItemType Directory -Path $stage | Out-Null
  $files=[ordered]@{'START-HERE.txt'=(Join-Path $repo 'NR-BRIDGE-START-HERE.txt');'licenses\Cheeky-GPLv3.txt'=(Join-Path $repo 'LICENSE');'licenses\MinHook.txt'=(Join-Path $repo 'third_party\reshade\deps\minhook\LICENSE.txt');'licenses\OpenVR.txt'=(Join-Path $repo 'third_party\openvr\LICENSE')}
  $files['NR-F5-REUSE.txt']=Join-Path $repo 'NR-F5-REUSE.txt'
+ $files['RELEASE-PREVIEW5.md']=Join-Path $repo 'RELEASE-PREVIEW5.md'
  $files['NR-VERSION-SWITCH.txt']=Join-Path $repo 'NR-VERSION-SWITCH.txt'
  if($mode -eq 'UEVR') {
   $files['plugins\CheekyFoveatedDLSS.dll']=Join-Path $bin 'CheekyFoveatedDLSS.dll'

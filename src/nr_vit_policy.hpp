@@ -23,6 +23,9 @@ public:
     }
 };
 enum class Role { none, start, inner, end };
+inline bool reuse_enabled(bool master, unsigned every, unsigned plain, bool fp8) {
+    return master && (fp8 ? every : plain) == 2;
+}
 inline Role role(std::string_view name) {
     if (!name.starts_with("cc_vit_1d_")) return Role::none;
     name.remove_prefix(10);

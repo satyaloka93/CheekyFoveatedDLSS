@@ -73,6 +73,7 @@ struct Context {
     unsigned calls{},runs{},first_call{};
     std::size_t param_bytes{};
     std::vector<OwnedLaunch> run;
+    unsigned every{1}, plain{1};
 };
 thread_local Context context;
 thread_local bool issued_work{};
@@ -159,7 +160,9 @@ int one(State& s,ID3D12GraphicsCommandList* list,const Launch& k) {
     const auto found=s.kernels.find(k.fn);
     static const Kernel empty;
     const Kernel& info=found==s.kernels.end()?empty:found->second;
-    auto& cache=s.caches[{c.device,c.key}];
+    // Every-frame mode must not allocate/copy a reuse cache for that kernel set.
+    if (!c.inside && info.role != Role::none && !reuse_enabled(true,c.every,c.plain,info.fp8))
+        return real(s,list,&k,1);
     if(info.role==Role::none) {
         if(c.inside) {
             const int rc=replay(s);census(s);
@@ -168,6 +171,12 @@ int one(State& s,ID3D12GraphicsCommandList* list,const Launch& k) {
         }
         return real(s,list,&k,1);
     }
+    const auto cache_key=std::make_pair(c.device,c.key);
+    if (!s.caches.contains(cache_key) && s.caches.size() >= 64) {
+        reject(s,"ViT view/pass cache limit reached; normal NR until restart");
+        return real(s,list,&k,1);
+    }
+    auto& cache=s.caches[cache_key];
     if(!k.params || !k.size || k.size>65536 || c.run.size()>=256 || c.param_bytes+k.size>1024*1024) {
         const int rc=replay(s);census(s);
         reject(s,"Unexpected or oversized ViT parameters; reuse disabled");
@@ -323,17 +332,19 @@ void initialize() {
     s.stats.hooked=true;s.stats.reason="Ready; reuse off";
 }
 struct Scope {
-    Scope(bool enabled,const char* version,ID3D12Device* device,ID3D12GraphicsCommandList* list,std::uint64_t key,bool reset) {
+    Scope(bool enabled,const char* version,ID3D12Device* device,ID3D12GraphicsCommandList* list,std::uint64_t key,bool reset,unsigned every,unsigned plain) {
         auto& s=state();std::lock_guard lock(s.mutex);
         const bool supported=version && std::strcmp(version,"310.9.16.0")==0;
-        if(!enabled || !supported || !s.stats.hooked || s.disabled) {
+        if(!enabled || (every != 2 && plain != 2) || !supported || !s.stats.hooked || s.disabled) {
             invalidate(s);context={};
+            if(!enabled || (every != 2 && plain != 2)) s.stats.reason="Every-frame NR: ViT reuse/copy disabled";
             if(enabled && !supported)s.stats.reason="Unsupported NR DLL (requires 310.9.16.0); normal NR";
             return;
         }
         constexpr auto pass_mask=std::uint64_t(3)<<62;
         const auto slot=s.clock.next(key&~pass_mask,(key&pass_mask)==0);
         context={true,reset || slot==UINT64_MAX,key,slot,device,list};
+        context.every=every;context.plain=plain;
     }
     int finish() noexcept {return finish_context();}
     ~Scope(){if(context.active)static_cast<void>(finish_context());}

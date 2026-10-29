@@ -1,6 +1,28 @@
 Cyberpunk VR standalone compatibility
 ====================================
 
+Cyberpunk VR Port 0.1.9 SBS cameras (2026-10-29, preview 5)
+---------------------------------------------------------
+Fixes valid gaze being rejected because the SBS DLSS views lacked camera
+projections. The native DX12 path identifies the left SBS output and named
+right-eye output, then binds the port's published per-eye camera projection
+to the corresponding native DLSS handle. Both eye viewport IDs are recognized.
+Requires the port's default per-eye SBS DLSS mode and eye windows enabled.
+Other experimental split modes are not validated by this compatibility path.
+
+Close the game and merge the standalone upgrade's CheekyFoveatedDLSS folder
+into Cyberpunk 2077/bin/x64. Preserve your loader, NVIDIA DLLs and settings.
+In CheekyFoveatedDLSS/CheekyFoveatedDLSS.ini, [CheekyFoveatedDLSS], set
+CenterMode=3, or select Shared right-eye gaze in the Stereo / Gaze menu.
+Restart the game. No new port DLL or OpenXR layer registration is required.
+
+User confirmed tracking appears to work. Runtime logs confirm both recovered
+eye projections, fresh accepted gaze (reject=0x0), and moving crop positions.
+Look for "Cyberpunk SBS native camera eye=0" and "eye=1", then SHARED GAZE
+records with projection=1. Exact alignment accuracy, performance improvements
+and long-session stability have not been measured. Earlier notes below are
+historical; this is the latest tested SBS path.
+
 Cyberpunk VR Port 0.1.8 asymmetric cameras (2026-10-20)
 ------------------------------------------------------
 The port still renders MAIN and VRCAM, but now normally uses asymmetric

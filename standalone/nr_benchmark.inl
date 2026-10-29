@@ -47,7 +47,7 @@ bool benchmark_apply(OverlayUiState& r, const OverlayRuntime& runtime, ULONGLONG
     const auto preset=std::to_string(nr_benchmark_presets[b.stage]);
     if(b.reuse_test) {
         const bool on=nr_benchmark_presets[b.stage]==2;
-        if(!command(r,runtime,"nr_comparison_set",std::string("NrProcessingOrder=0\nNrVitReuse=")+(on?"1":"0")))return false;
+        if(!command(r,runtime,"nr_comparison_set",std::string("NrProcessingOrder=0\nVitEvery=2\nVitEveryPlain=2\nNrVitReuse=")+(on?"1":"0")))return false;
         if(r.draft.nr_vit_reuse!=on)return false;
         nr_capture_write(b.root/("stage-"+std::to_string(b.stage)+"-applied.json"),r.snapshot);
         b.measuring=false;b.due=now+8000;

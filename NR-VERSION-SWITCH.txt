@@ -40,7 +40,8 @@ The DLL directory and INI directory are different for UEVR.
 
 CheekyNR-current.ini and CheekyNR-previous.ini store independent NR tuning in
 the same configuration directory as CheekyFoveatedDLSS.ini. Although these
-use the full settings schema, ONLY Nr* keys are applied from the profiles.
+use the full settings schema, only NR settings (Nr* keys plus VitEvery and
+VitEveryPlain) are applied from the profiles.
 SR, gaze and integration settings continue to come from the main INI.
 The menu always edits THIS SESSION's NR profile, not the pending version.
 

@@ -104,6 +104,8 @@ struct Settings {
 
     bool nr_enabled{false};
     bool nr_vit_reuse{false}; // Experimental F5 private bottleneck copy; native D3D12 only.
+    std::uint32_t nr_vit_every{1}; // 1 compute every frame; 2 alternate-frame FP8 reuse.
+    std::uint32_t nr_vit_every_plain{1}; // Same for plain FP16 kernels.
     NrProcessingOrder nr_processing_order{NrProcessingOrder::after_upscaling};
     bool nr_foveated{true};
     bool nr_second_pass{false};

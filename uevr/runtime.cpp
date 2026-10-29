@@ -666,7 +666,7 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
                     const auto key = line.substr(0, eq);
                     if (key != "NrEnabled" && key != "NrSecondPass" && key != "NrThirdPass" &&
                         key != "NrColorPipeline" && key != "NrPass2ColorPipeline" &&
-key != "NrVitReuse" && key != "NrProcessingOrder" && key != "NrPreset" &&
+key != "NrVitReuse" && key != "VitEvery" && key != "VitEveryPlain" && key != "NrProcessingOrder" && key != "NrPreset" &&
                         key != "NrPass2Preset" && key != "NrPass3Preset") return false;
                 }
                 if (line.starts_with("EyeCalibrationLearned")) {

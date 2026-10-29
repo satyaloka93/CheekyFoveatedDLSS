@@ -39,13 +39,14 @@ std::string_view trim(std::string_view s) {
 }
 }
 bool set_named_setting(Settings& s, std::string_view key, std::string_view value) {
+    if ((key == "VitEvery" || key == "VitEveryPlain") && value != "1" && value != "2") return false;
 #define CHEEKY_SETTING(name, field) if (key == name) return parse(value, s.field);
 #include "settings_fields.inc"
 #undef CHEEKY_SETTING
     return false;
 }
 std::string_view setting_group(std::string_view key) {
-    if (key.starts_with("Nr")) return "nr";
+    if (key.starts_with("Nr") || key == "VitEvery" || key == "VitEveryPlain") return "nr";
     for (const auto gaze : {"XOffset", "HeightOffset", "InvertStereoXOffset", "CenterMode",
             "AutoStereoAlignment", "EyeCalibrationContinuous", "EyeCalibrationMethod", "EyeCalibrationLearnedMethod", "EyeCalibrationLearnedSignature", "EyeCalibrationLearnedSessions", "AlignedHeightOffset", "ShowNextJumpTarget", "SimulationPattern",
             "ManualStereoMapping", "ManualStereoRightFirst", "IndependentOpenXRGaze",
@@ -98,6 +99,7 @@ bool read_settings_file(const std::filesystem::path& path, Settings& s, std::str
     std::ifstream in(path);
     if (!in) { error = "Cannot read settings file"; return false; }
     auto candidate = s;
+    candidate.nr_vit_every = candidate.nr_vit_every_plain = 1; // Safe migration: old files had no cadence keys.
     candidate.d3d12_lower_hook = true; // Older files use the new lower-hook default.
     candidate.manual_stereo_mapping = false;
     candidate.manual_stereo_right_first = false;

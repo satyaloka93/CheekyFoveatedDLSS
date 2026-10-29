@@ -338,6 +338,12 @@ void draw_nr(Settings& s, bool previous_nr) {
     slider("Working scale", s.nr_working_scale, .1F, 1.0F);
     ImGui::BeginDisabled(previous_nr);
     ImGui::Checkbox("Experimental F5 ViT reuse", &s.nr_vit_reuse);
+    auto fp8_cadence = s.nr_vit_every == 2 ? 1U : 0U;
+    auto plain_cadence = s.nr_vit_every_plain == 2 ? 1U : 0U;
+    combo("ViT FP8 cadence (VitEvery)", fp8_cadence, "1: Every frame (no reuse)\0 2: Alternate frames (reuse)\0");
+    combo("ViT FP16 cadence (VitEveryPlain)", plain_cadence, "1: Every frame (no reuse)\0 2: Alternate frames (reuse)\0");
+    s.nr_vit_every = fp8_cadence + 1; s.nr_vit_every_plain = plain_cadence + 1;
+    ImGui::TextWrapped("Both default to 1 for clarity and no reuse-cache growth. 2 requires the F5 master switch. A game restart releases previously retained reuse buffers; turning reuse off does not free in-flight GPU resources.");
     ImGui::TextWrapped("Experimental speed option: reuses part of NR between frames. May lag during motion. Requires native DX12 and NR 310.9.16.0; otherwise normal NR runs.");
     nr_choice("NR network preset", s.nr_preset, true);
     ImGui::EndDisabled();

@@ -12,6 +12,18 @@ struct GazeProjection {
     float left{}, right{}, up{}, down{};
     bool valid{};
 };
+inline bool cyberpunk_sbs_viewport(std::uint32_t id) {
+    return id == 0x43565201U || id == 0x43565202U;
+}
+// 0.1.9 default split: left writes the left half of the engine SBS output;
+// right writes the port's explicitly named eye-local staging output.
+inline int cyberpunk_sbs_output_eye(std::uint64_t resource_width, unsigned resource_height,
+    unsigned width, unsigned height, unsigned x, unsigned y, bool named_right) {
+    if (!width || !height || x || y || resource_height != height) return -1;
+    if (named_right && resource_width == width) return 1;
+    if (!named_right && resource_width == std::uint64_t(width)*2) return 0;
+    return -1;
+}
 
 // UV in an asymmetric headset eye is not UV in the game's render camera.
 // Ported from the maintained fork's 44ac27f, with finite-FOV validation.

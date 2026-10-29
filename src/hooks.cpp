@@ -3280,7 +3280,7 @@ std::uint32_t hook_sl_set_constants(
         if (result != 0U || static_cast<const SlConstants*>(values)->orthographic_projection != 0)
             projection = {};
         if (current_settings().center_mode == FoveationCenterMode::openxr_gaze_right_eye &&
-            GetModuleHandleW(L"CyberpunkVR_Stereo.dll") && (id & 0x60000000U) == 0)
+            GetModuleHandleW(L"CyberpunkVR_Stereo.dll") && ((id & 0x60000000U) == 0 || cyberpunk_sbs_viewport(id)))
             record_shared_gaze_projection(projection, id);
         const auto camera_frame_key = gaze_frame_key(frame);
         AcquireSRWLockExclusive(&streamline_lock);
@@ -3445,7 +3445,7 @@ std::uint32_t hook_sl_evaluate_feature(
                     }
                 }
                 GazeProjection projection{};
-                if (matches == 1 && (viewport_id & 0x60000000U) == 0) {
+                if (matches == 1 && ((viewport_id & 0x60000000U) == 0 || cyberpunk_sbs_viewport(viewport_id))) {
                     AcquireSRWLockShared(&streamline_lock);
                     projection = streamline_gaze_projections.find(viewport_id, gaze_frame_key(frame), GetTickCount64());
                     ReleaseSRWLockShared(&streamline_lock);
@@ -5222,6 +5222,56 @@ void stamp_d3d12_game_output(ID3D12GraphicsCommandList* list, const NgxHandle* h
         get_ui(parameters, "DLSS.Output.Subrect.Base.X"), get_ui(parameters, "DLSS.Output.Subrect.Base.Y"),
         get_ui(parameters, "OutWidth"), get_ui(parameters, "OutHeight"));
 }
+GazeProjection cyberpunk_sbs_native_camera(const NgxParameters* parameters, unsigned& eye) {
+    const auto module = GetModuleHandleW(L"CyberpunkVR_Stereo.dll");
+    if (!module || !parameters) return {};
+    const auto enabled = reinterpret_cast<const int*>(GetProcAddress(module,"CyberpunkVR_EngineStereo"));
+    const auto eye_windows = reinterpret_cast<const int*>(GetProcAddress(module,"CyberpunkVR_EngineStereoEyeWindows"));
+    const auto per_eye = reinterpret_cast<const std::atomic<unsigned>*>(GetProcAddress(module,"CyberpunkVR_EngineStereoDlssPerEye"));
+    const auto mode = reinterpret_cast<const std::atomic<unsigned>*>(GetProcAddress(module,"CyberpunkVR_EngineStereoDlssMode"));
+    const auto builds = reinterpret_cast<const std::uint64_t*>(GetProcAddress(module,"CyberpunkVR_DebugEngineStereoEyeBuilds"));
+    const auto rows = reinterpret_cast<const float*>(GetProcAddress(module,"CyberpunkVR_DebugEngineStereoEyes"));
+    if (!enabled || !*enabled || !eye_windows || !*eye_windows || !per_eye || !per_eye->load() || !mode || mode->load()!=0 || !builds || !rows) return {};
+    auto* output = get_d3d12_parameter_resource(parameters,"Output");
+    if (!output) return {};
+    const auto desc = output->GetDesc();
+    if (desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || desc.DepthOrArraySize != 1) return {};
+    wchar_t name[128]{}; UINT bytes=sizeof(name)-sizeof(wchar_t);
+    const bool named_right = SUCCEEDED(output->GetPrivateData(WKPDID_D3DDebugObjectNameW,&bytes,name)) &&
+        std::wcscmp(name,L"CyberpunkVR right eye DLSS output")==0;
+    const int selected = cyberpunk_sbs_output_eye(desc.Width,desc.Height,
+        get_ui(parameters,"OutWidth"),get_ui(parameters,"OutHeight"),
+        get_ui(parameters,"DLSS.Output.Subrect.Base.X"),get_ui(parameters,"DLSS.Output.Subrect.Base.Y"),named_right);
+    if (selected < 0) return {};
+    eye=static_cast<unsigned>(selected);
+    const auto before=builds[eye];
+    float first[7]{},second[7]{};
+    std::memcpy(first,rows+eye*7,sizeof(first));
+    // Only borrow handedness from a fresh MAIN publication, not its projection.
+    float sign{}; bool fresh{};
+    AcquireSRWLockShared(&streamline_lock);
+    fresh=streamline_gaze_projections.recent(0,GetTickCount64()).valid;
+    sign=cached_sl_constants.camera_view_to_clip.values[11];
+    ReleaseSRWLockShared(&streamline_lock);
+    std::memcpy(second,rows+eye*7,sizeof(second));
+    if (!fresh || !before || builds[eye]!=before || std::memcmp(first,second,sizeof(first))!=0 ||
+        !std::isfinite(sign) || std::abs(std::abs(sign)-1.F)>.0001F) return {};
+    static std::mutex published_mutex;
+    static std::uint64_t last_build[2]{},last_change[2]{};
+    {
+        std::lock_guard lock(published_mutex);
+        const auto now=GetTickCount64();
+        if(last_build[eye]!=before){last_build[eye]=before;last_change[eye]=now;}
+        if(now<last_change[eye] || now-last_change[eye]>100) return {};
+    }
+    float matrix[16]{};
+    matrix[0]=first[3];matrix[5]=first[4];matrix[8]=first[5];matrix[9]=first[6];matrix[11]=sign;
+    const auto result=gaze_projection_from_matrix(matrix);
+    static std::atomic<unsigned> logs{};
+    if(result.valid && logs.fetch_add(1)<8) trace_event("Cyberpunk SBS native camera eye=%u builds=%llu output=%p tangents=%.5f,%.5f,%.5f,%.5f",
+        eye,static_cast<unsigned long long>(before),output,result.left,result.right,result.up,result.down);
+    return result;
+}
 NgxResult process_d3d12_evaluation(const D3D12NgxEvaluationCall& call,
     D3D12NgxEvaluateFn original, void* context) {
     // Bind the call-scoped camera to the actual native handle (not an assumed
@@ -5230,6 +5280,16 @@ NgxResult process_d3d12_evaluation(const D3D12NgxEvaluationCall& call,
     if (native_gaze_projection.active) {
         camera_scope.emplace(static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(call.handle)),
             native_gaze_projection.projection, native_gaze_projection.viewport);
+    }
+    if (current_settings().center_mode == FoveationCenterMode::openxr_gaze_right_eye &&
+        recognizable_d3d12_dlss_evaluation(call)) {
+        unsigned eye{};
+        const auto projection=cyberpunk_sbs_native_camera(call.parameters,eye);
+        if (projection.valid) {
+            camera_scope.reset();
+            camera_scope.emplace(static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(call.handle)),
+                projection,0x43565201U+eye);
+        }
     }
     // Streamline supplies its own tagged extents. Restrict normalization to
     // recognizable native DLSS calls, including handles adopted after attach.

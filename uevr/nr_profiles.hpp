@@ -6,7 +6,7 @@ inline std::filesystem::path nr_profile_path(const std::filesystem::path& direct
     return directory / (previous ? L"CheekyNR-previous.ini" : L"CheekyNR-current.ini");
 }
 inline void copy_nr_settings(Settings& destination, const Settings& source) {
-#define CHEEKY_SETTING(name, field) if (std::string_view(name).starts_with("Nr")) destination.field = source.field;
+#define CHEEKY_SETTING(name, field) if (setting_group(name) == "nr") destination.field = source.field;
 #include "settings_fields.inc"
 #undef CHEEKY_SETTING
 }

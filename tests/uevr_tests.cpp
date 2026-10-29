@@ -105,6 +105,12 @@ void settings_tests(const std::filesystem::path& root) {
             "Returning to current must restore its NR tuning");
     }
     Settings s; require(s.d3d12_lower_hook, "Lower hook is the default");
+    require(s.nr_vit_every==1 && s.nr_vit_every_plain==1, "Every-frame ViT defaults");
+    require(set_named_setting(s,"VitEvery","2") && set_named_setting(s,"VitEveryPlain","1"), "ViT cadence controls");
+    require(!set_named_setting(s,"VitEvery","0") && !set_named_setting(s,"VitEveryPlain","3"), "Reject invalid cadence");
+    Settings nr_profile; copy_nr_settings(nr_profile,s);
+    require(nr_profile.nr_vit_every==2 && nr_profile.nr_vit_every_plain==1, "Version profiles include cadence");
+    require(reset_settings_group(s,"nr") && s.nr_vit_every==1, "NR reset includes cadence");
     for (const auto prefix : {"Nr", "NrPass2", "NrPass3"}) {
         for (const auto suffix : {"ColorPipeline", "SignalEncoding", "ScalingDomain", "ExposureMode"}) {
             const auto key = std::string(prefix) + suffix;

@@ -1,4 +1,20 @@
 EXPERIMENTAL F5 INTERNAL NR REUSE (standalone D3D12)
+CADENCE CONTROLS (2026-10-29)
+VitEvery=1 and VitEveryPlain=1 mean compute every frame, with no ViT reuse
+or reuse-cache copies for the corresponding FP8/plain-FP16 kernel set.
+Both default to 1, including older INIs with no cadence fields. Setting 2
+allows alternate-frame reuse ONLY when the NrVitReuse master switch is on.
+The standalone and UEVR NR menus expose both controls. They are saved in the
+active CheekyNR-current.ini or CheekyNR-previous.ini [CheekyFoveatedDLSS]
+section, not OptiScaler.ini. These controls do not change precision or models.
+Existing GPU cache allocations are retained until game exit for in-flight
+safety; restart the game for a clean memory-growth test. User reports memory
+growth with reuse enabled: root cause not established. Cache metadata is now
+limited to 64 view/pass entries; existing GPU allocation cap remains 256 MiB.
+This limit is not proof that all memory growth is fixed.
+The optional F5 benchmark explicitly sets both cadences to 2 temporarily,
+then restores original settings. Do not run it for the no-reuse clarity test.
+
 
 F5 is janblade's Fork From a Fork From a Fork of OptiScaler, not an NVIDIA
 option or a keyboard shortcut. This port reuses the ViT bottleneck output on

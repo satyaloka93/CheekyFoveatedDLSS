@@ -6,6 +6,13 @@ using namespace cheeky::foveated_dlss::nr_vit;
 int main(){
     unsigned checks=0;
     auto check=[&](bool ok){++checks;if(!ok)throw std::runtime_error("F5 policy check "+std::to_string(checks));};
+    for(bool fp8 : {false,true}) {
+        check(!reuse_enabled(true,1,1,fp8));
+        check(!reuse_enabled(false,2,2,fp8));
+        check(reuse_enabled(true,2,2,fp8));
+        check(reuse_enabled(true,2,1,fp8)==fp8);
+        check(reuse_enabled(true,1,2,fp8)!=fp8);
+    }
     check(role("cc_vit_1d_repack_2d_to_1d_fp8")==Role::start);
     check(role("cc_vit_1d_repack_1d_to_2d")==Role::end);
     check(role("cc_vit_1d_attention_fp8")==Role::inner);

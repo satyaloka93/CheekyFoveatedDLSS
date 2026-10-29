@@ -2817,6 +2817,14 @@ void test_cyberpunk_shared_gaze() {
     const GazeProjection asymmetric[2] = {
         {-1.841771F, .947191F, 1.328981F, -1.328981F, true}, eye};
     GazeProjectionCache exact_cameras;
+    expect(cyberpunk_sbs_viewport(0x43565201U) && cyberpunk_sbs_viewport(0x43565202U),
+        "SBS eye IDs are not Cheeky private viewport IDs");
+    expect(!cyberpunk_sbs_viewport(0x40000001U), "Other private viewport remains excluded");
+    expect(cyberpunk_sbs_output_eye(6288,3000,3144,3000,0,0,false)==0, "SBS left half identity");
+    expect(cyberpunk_sbs_output_eye(3144,3000,3144,3000,0,0,true)==1, "Named right-eye staging identity");
+    expect(cyberpunk_sbs_output_eye(3144,3000,3144,3000,0,0,false)==-1, "Do not guess eye of ordinary local output");
+    expect(cyberpunk_sbs_output_eye(6288,3000,3144,3000,3144,0,false)==-1, "Unsupported direct-right mode rejected");
+    expect(cyberpunk_sbs_output_eye(6288,3000,6288,3000,0,0,false)==-1, "Combined SBS evaluation not an eye");
     const float windows[8]{asymmetric[0].left, asymmetric[0].right, asymmetric[0].down, asymmetric[0].up,
         asymmetric[1].left, asymmetric[1].right, asymmetric[1].down, asymmetric[1].up};
     // Reproduce real missing-constants failure: MAIN publishes, VRCAM never does.
