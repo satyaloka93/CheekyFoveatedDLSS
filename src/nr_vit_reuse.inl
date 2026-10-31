@@ -367,5 +367,7 @@ void nr_vit_reuse_shutdown() noexcept {
     s.disabled=true;nr_vit::invalidate(s);
     s.stats.reason="Interception stopped; restart game to use F5 reuse";
 }
-NrVitReuseSnapshot nr_vit_reuse_snapshot(){auto& s=nr_vit::state();std::lock_guard lock(s.mutex);return s.stats;}
+NrVitReuseSnapshot nr_vit_reuse_snapshot(){auto& s=nr_vit::state();std::lock_guard lock(s.mutex);
+    auto result=s.stats;result.retained_bytes=s.allocated;result.cache_entries=s.caches.size();
+    result.retired_buffers=s.retired.size();return result;}
 }

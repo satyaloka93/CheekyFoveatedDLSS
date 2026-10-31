@@ -1726,9 +1726,21 @@ void note_dlss_nr_skipped(DlssNrRoute route, const Settings& settings, const cha
 }
 void collect_dlss_nr_submissions() noexcept {
     std::lock_guard execution_lock(calibration12_execution_mutex());
+    const auto settings = current_settings();
+    // Keep processed-to-original SR history until its next evaluation consumes it.
+    if (!settings.nr_enabled) release_dlss_nr_inputs(0, true);
     std::lock_guard lock(nr_mutex);
+    for (auto& view : views) {
+        if (!settings.nr_enabled ||
+            ((view.view_id & kNrPass2ViewBit) && !settings.nr_second_pass) ||
+            ((view.view_id & kNrPass3ViewBit) && (!settings.nr_second_pass || !settings.nr_third_pass))) {
+            view.retired = true;
+            view.was_enabled = false;
+        }
+    }
     collect_retired_views();
     collect_nr_pixel_jobs();
+    if (!settings.nr_enabled) diagnostics.state = DlssNrState::disabled;
 }
 void skip_dlss_nr_history(const DlssViewId view_id) noexcept {
     std::lock_guard lock(nr_mutex);
@@ -1776,7 +1788,23 @@ void reset_dlss_nr() noexcept {
 DlssNrSnapshot dlss_nr_snapshot() noexcept {
     std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(nr_mutex);
-    return diagnostics;
+    auto result = diagnostics;
+    result.retained_texture_bytes = result.active_features = result.cached_features = result.retiring_views = 0;
+    for (const auto& view : views) {
+        result.active_features += view.handle != nullptr;
+        result.cached_features += view.retired_features.size();
+        result.retiring_views += view.retired;
+        for (const auto& gpu : view.gpu_resources) {
+            for (auto* texture : {gpu.original_output, gpu.color_proxy, gpu.neural_output,
+                    gpu.guides.motion.Get(), gpu.guides.depth.Get()}) {
+                if (!texture || !runtime.device) continue;
+                const auto desc = texture->GetDesc();
+                const auto info = runtime.device->GetResourceAllocationInfo(0, 1, &desc);
+                if (info.SizeInBytes != UINT64_MAX) result.retained_texture_bytes += info.SizeInBytes;
+            }
+        }
+    }
+    return result;
 }
 
 const char* dlss_nr_state_name(const DlssNrState state) noexcept {

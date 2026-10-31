@@ -77,7 +77,7 @@ public:
 [[nodiscard]] ID3D12Resource* prepare_dlss_nr_input(
     DlssNrFrame frame, const Settings& settings) noexcept;
 void collect_dlss_nr_input_submissions() noexcept;
-void release_dlss_nr_inputs(DlssViewId view_id = 0U) noexcept;
+void release_dlss_nr_inputs(DlssViewId view_id = 0U, bool preserve_history = false) noexcept;
 // Additional SR resets track the input actually substituted for this view.
 // First/original input needs no reset, even when order or dimensions change.
 // Entering processed Before input, changing its dimensions, or returning from

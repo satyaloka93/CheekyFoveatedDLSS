@@ -1684,6 +1684,16 @@ void note_d3d12_present_impl(
 ) noexcept {
     collect_dlss_nr_input_submissions();
     collect_dlss_nr_submissions();
+    static std::atomic<ULONGLONG> next_nr_memory_log{};
+    const auto memory_now = GetTickCount64();
+    auto memory_next = next_nr_memory_log.load();
+    if (memory_now >= memory_next && next_nr_memory_log.compare_exchange_strong(memory_next, memory_now + 5000)) {
+        const auto nr = dlss_nr_snapshot();
+        const auto vit = nr_vit_reuse_snapshot();
+        trace_event("NR memory textures=%llu features=%llu cachedFeatures=%llu retiringViews=%llu vitBytes=%llu vitCaches=%llu vitRetired=%llu (excludes NVIDIA internal allocations and game resources)",
+            nr.retained_texture_bytes,nr.active_features,nr.cached_features,nr.retiring_views,
+            vit.retained_bytes,vit.cache_entries,vit.retired_buffers);
+    }
     collect_peripheral_dlaa_resources();
     collect_crop_motion12();
     collect_d3d12_resources();
@@ -5274,6 +5284,7 @@ GazeProjection cyberpunk_sbs_native_camera(const NgxParameters* parameters, unsi
 }
 NgxResult process_d3d12_evaluation(const D3D12NgxEvaluationCall& call,
     D3D12NgxEvaluateFn original, void* context) {
+    collect_dlss_nr_submissions();
     // Bind the call-scoped camera to the actual native handle (not an assumed
     // left/right index). This encloses SR and NR crop preparation alike.
     std::optional<ScopedGazeProjection> camera_scope;

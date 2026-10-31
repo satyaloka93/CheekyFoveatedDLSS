@@ -5,6 +5,7 @@ struct ID3D12GraphicsCommandList;
 namespace cheeky::foveated_dlss {
 struct NrVitReuseSnapshot {
     std::uint64_t computed{}, reused{}, rejected{}, copied_bytes{};
+    std::uint64_t retained_bytes{}, cache_entries{}, retired_buffers{};
     std::uint64_t split_runs{}, replayed{}, cache_misses{}, last_run_kernels{}, last_run_calls{};
     bool hooked{};
     std::string reason;

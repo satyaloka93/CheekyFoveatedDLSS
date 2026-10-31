@@ -1,4 +1,5 @@
-Cheeky 0.5.5 - NR bridge preview 4 (2026-10-21)
+Cheeky 0.5.5 - NR bridge preview 6 (2026-11-01)
+NR memory cleanup test: read RELEASE-PREVIEW6.md for scope and testing.
 Based on Chtiblue's triple-DLSS5 branch, with this fork's shared-gaze compatibility.
 
 UPGRADE PACKAGES, NOT FRESH INSTALLERS

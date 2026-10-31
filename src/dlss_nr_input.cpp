@@ -161,12 +161,12 @@ void collect_dlss_nr_input_submissions() noexcept {
     std::lock_guard lock(mutex);
     collect();
 }
-void release_dlss_nr_inputs(DlssViewId view_id) noexcept {
+void release_dlss_nr_inputs(DlssViewId view_id, bool preserve_history) noexcept {
     std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(mutex);
     for (auto& input : inputs)
         if (!view_id || input.view == view_id) input.retired = true;
-    for (auto it = histories.begin(); it != histories.end();)
+    for (auto it = histories.begin(); !preserve_history && it != histories.end();)
         if (!view_id || it->view == view_id) it = histories.erase(it); else ++it;
     collect();
 }

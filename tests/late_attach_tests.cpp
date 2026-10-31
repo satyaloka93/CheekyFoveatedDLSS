@@ -932,12 +932,18 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
     evaluate(0);
     expect_input(false, 0, "Repeated disabled frame reset raw history");
     require(evaluation_order == "S", "Disabled NR still evaluated");
+    require(nr_creates() == nr_releases(), "NR-off retained completed NVIDIA feature handles");
+    command("1\n982\nset\nNrEnabled=true");
+    const auto creates_before_restart = nr_creates();
+    evaluate(0);
+    require(nr_creates() > creates_before_restart, "NR re-enable did not recreate released features");
+    require(evaluation_order.find('N') != std::string::npos, "NR re-enable did not evaluate");
     proc<void(*)(void(*)(const NgxParameters*))>(f.ngx,"CheekyFakeObserve")(nullptr);
     proc<void(*)(void(*)(const NgxParameters*))>(nr,"CheekyFakeObserve")(nullptr);
     proc<void(*)(void(*)(const NgxParameters*))>(nr,"CheekyFakeObserveCreated")(nullptr);
     command("1\n97\nset\nEnabled=true\nNrEnabled=false\nPeripheralDlaa=false\nAutoStereoAlignment=false");
     nr_motion_resource.Reset();
-    puts("NR controls, cached creation tuning, jittered vectors, SDR codec/edge sampling and reset isolation passed");
+    puts("NR controls, cached creation tuning, jittered vectors, SDR codec/edge sampling, reset isolation and off/on resource release passed");
 }
 }
 void prepare_late_attach_test(const std::filesystem::path& bin,ID3D11Device* dx11,ID3D12Device* dx12,ID3D12CommandQueue* queue,bool use_c,bool use_sl,const std::filesystem::path& ngx_path) {

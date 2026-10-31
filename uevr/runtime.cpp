@@ -220,10 +220,15 @@ std::string snapshot_locked(State& s) {
         << ",\"codec_creations\":" << nr.codec_creations
         << ",\"border_creations\":" << nr.border_creations
         << ",\"resource_rebinds\":" << nr.resource_rebinds
+        << ",\"retained_texture_bytes\":" << nr.retained_texture_bytes
+        << ",\"active_features\":" << nr.active_features << ",\"cached_features\":" << nr.cached_features
+        << ",\"retiring_views\":" << nr.retiring_views
         << ",\"vram_bytes\":" << nr.intermediate_vram_bytes << "}"
         << ",\"nr_vit_reuse\":{";
     const auto vit=nr_vit_reuse_snapshot();
     out << "\"computed\":" << vit.computed << ",\"reused\":" << vit.reused
+        << ",\"retained_bytes\":" << vit.retained_bytes << ",\"cache_entries\":" << vit.cache_entries
+        << ",\"retired_buffers\":" << vit.retired_buffers
         << ",\"rejected\":" << vit.rejected << ",\"copied_bytes\":" << vit.copied_bytes
         << ",\"hooked\":" << vit.hooked << ",\"reason\":\"" << json_escape(vit.reason) << "\""
         << ",\"streaming\":true,\"split_runs\":" << vit.split_runs << ",\"replayed\":" << vit.replayed

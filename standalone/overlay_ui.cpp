@@ -858,9 +858,12 @@ void draw_nr_performance(std::string_view snapshot, const Settings& s) {
         region_line(nr, nr, "DLSS-NR region", "region_width", "region_height", "region_x", "region_y",
             "processing_width", "processing_height");
         resolution_line(nr, "DLSS-NR working size", "working_width", "working_height");
-        if (number(nr, "vram_bytes") > 0)
-            ImGui::Text("Intermediate VRAM: %.1f MiB", number(nr, "vram_bytes") / (1024 * 1024));
-        else ImGui::TextUnformatted("Intermediate VRAM: Not allocated yet");
+        ImGui::Text("Retained NR textures: %.1f MiB", number(nr, "retained_texture_bytes") / (1024 * 1024));
+        const auto vit_memory = member(snapshot, "nr_vit_reuse");
+        ImGui::Text("Retained ViT buffers: %.1f MiB", number(vit_memory, "retained_bytes") / (1024 * 1024));
+        ImGui::Text("NR features active / cached: %.0f / %.0f; views awaiting release: %.0f",
+            number(nr,"active_features"),number(nr,"cached_features"),number(nr,"retiring_views"));
+        ImGui::TextWrapped("These counts exclude NVIDIA's internal allocations and game resources. NR-off releases features and textures after recorded GPU work drains. ViT buffers remain capped at 256 MiB until game exit.");
     }
 }
 
