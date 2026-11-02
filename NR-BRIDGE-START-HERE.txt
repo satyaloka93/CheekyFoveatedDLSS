@@ -1,5 +1,5 @@
-Cheeky 0.5.5 - NR bridge preview 6 (2026-11-01)
-NR memory cleanup test: read RELEASE-PREVIEW6.md for scope and testing.
+Cheeky 0.5.5 - NR bridge preview 7 (2026-11-02)
+Cyberpunk SBS flashing fix: read RELEASE-PREVIEW7.md for scope and installation.
 Based on Chtiblue's triple-DLSS5 branch, with this fork's shared-gaze compatibility.
 
 UPGRADE PACKAGES, NOT FRESH INSTALLERS
