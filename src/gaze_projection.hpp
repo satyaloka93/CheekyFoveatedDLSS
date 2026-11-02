@@ -25,6 +25,25 @@ inline int cyberpunk_sbs_output_eye(std::uint64_t resource_width, unsigned resou
     return -1;
 }
 
+// The engine eye clones inherit MAIN's vertical FOV, but apply the published
+// aspect and NDC shifts. Debug matrix rows can instead describe auxiliary
+// rebuilds; they are not the current render camera publication.
+inline GazeProjection cyberpunk_sbs_window_camera(float aspect, float shift_x,
+    float shift_y, const GazeProjection& main) {
+    if (!main.valid || !std::isfinite(main.up) || !std::isfinite(main.down) ||
+        main.up <= 0.F || main.down >= 0.F || !std::isfinite(aspect) ||
+        aspect <= .05F || aspect > 10.F || !std::isfinite(shift_x) ||
+        !std::isfinite(shift_y) || std::abs(shift_x) >= 1.F || std::abs(shift_y) >= 1.F)
+        return {};
+    const float half_y = (main.up - main.down) * .5F;
+    const float half_x = half_y * aspect;
+    GazeProjection result{-(1.F + shift_x) * half_x, (1.F - shift_x) * half_x,
+        (1.F - shift_y) * half_y, -(1.F + shift_y) * half_y, true};
+    result.valid = std::isfinite(result.left) && std::isfinite(result.right) &&
+        std::isfinite(result.up) && std::isfinite(result.down);
+    return result;
+}
+
 // UV in an asymmetric headset eye is not UV in the game's render camera.
 // Ported from the maintained fork's 44ac27f, with finite-FOV validation.
 inline bool reproject_gaze_center(const GazeProjection& from, const GazeProjection& to,

@@ -2772,6 +2772,38 @@ void test_cyberpunk_shared_gaze() {
     expect(std::memcmp(&real_viewport_type, &viewport_probe.struct_type, sizeof(real_viewport_type)) == 0,
         "Lower hook must recognize the real Streamline ViewportHandle GUID, not zero");
     expect(viewport_probe.struct_version == 1, "ViewportHandle uses the official version-1 ABI");
+    {
+        const GazeProjection main{-2.F,2.F,1.33061F,-1.33061F,true};
+        const float aspect=(1.84177F+.94719F)/(2.F*1.33061F);
+        const float shift=(1.84177F-.94719F)/(1.84177F+.94719F);
+        const auto left=cyberpunk_sbs_window_camera(aspect,shift,0.F,main);
+        const auto right=cyberpunk_sbs_window_camera(aspect,-shift,0.F,main);
+        expect(left.valid && right.valid,"Published eye windows produce valid cameras");
+        expect_near(left.left,-1.84177F,.0001F,"Left window matches intended lens");
+        expect_near(right.right,1.84177F,.0001F,"Right window matches intended lens");
+        // Regression: the eye-tagged Streamline constants may still be the
+        // symmetric MAIN projection, even when viewport 0 has been evicted.
+        GazeProjectionCache cache;
+        cache.record(0,1,1,main);
+        for (unsigned i=0;i<40;++i) cache.record(0x43565201U,i+2,2+i,main);
+        expect(!cache.recent(0,41).valid,"Busy eye viewports evict MAIN from bounded cache");
+        const auto current=cache.find(0x43565201U,41,41);
+        const auto recovered=cyberpunk_sbs_window_camera(aspect,shift,0.F,current);
+        expect(gaze_projection_matches(recovered,left),"Current eye constants recover window after MAIN eviction");
+        expect(gaze_projection_matches(cyberpunk_sbs_window_camera(aspect,shift,0.F,left),left),
+            "Already corrected eye projection is not shifted twice");
+
+        float u{},v{};
+        expect(projection_forward_center(left,u,v),"Forward projection resolves");
+        expect_near(u,.66038F,.001F,"Left forward center stays asymmetric");
+        auto zoom=main; zoom.up*=.5F;zoom.down*=.5F;
+        const auto zoomed=cyberpunk_sbs_window_camera(aspect,shift,0.F,zoom);
+        expect_near(zoomed.left,left.left*.5F,.0001F,"Real MAIN zoom is retained");
+        expect(!cyberpunk_sbs_window_camera(aspect,shift,0.F,{}).valid,"Missing MAIN rejected");
+        expect(!cyberpunk_sbs_window_camera(0.F,shift,0.F,main).valid,"Uninitialized aspect rejected");
+        expect(!cyberpunk_sbs_window_camera(aspect,1.F,0.F,main).valid,"Invalid lens shift rejected");
+        expect(!cyberpunk_sbs_window_camera(aspect,NAN,0.F,main).valid,"Nonfinite lens shift rejected");
+    }
     reset_gaze_foveation();
     Settings settings; settings.enabled = true; settings.width = settings.height = .24F;
     settings.center_mode = FoveationCenterMode::openxr_gaze_right_eye;

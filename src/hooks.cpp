@@ -5257,15 +5257,32 @@ GazeProjection cyberpunk_sbs_native_camera(const NgxParameters* parameters, unsi
     const auto before=builds[eye];
     float first[7]{},second[7]{};
     std::memcpy(first,rows+eye*7,sizeof(first));
-    // Only borrow handedness from a fresh MAIN publication, not its projection.
-    float sign{}; bool fresh{};
-    AcquireSRWLockShared(&streamline_lock);
-    fresh=streamline_gaze_projections.recent(0,GetTickCount64()).valid;
-    sign=cached_sl_constants.camera_view_to_clip.values[11];
-    ReleaseSRWLockShared(&streamline_lock);
+    // Eye clones share MAIN vertical FOV and use the published aspect/shift.
+    // Ignore the last rebuilt matrix: auxiliary cameras overwrite those rows.
+    // The exact SBS evaluation already carries its MAIN-derived vertical FOV.
+    // Prefer that frame's constants: viewport 0 can age out of the 32-entry
+    // cache while the synthetic eye viewports remain active. Rejecting here
+    // used to leave their symmetric MAIN matrix bound as an eye camera.
+    GazeProjection main{};
+    if (native_gaze_projection.active && native_gaze_projection.viewport == 0x43565201U+eye)
+        main = native_gaze_projection.projection;
+    if (!main.valid) {
+        AcquireSRWLockShared(&streamline_lock);
+        main=streamline_gaze_projections.recent(0,GetTickCount64());
+        ReleaseSRWLockShared(&streamline_lock);
+    }
     std::memcpy(second,rows+eye*7,sizeof(second));
-    if (!fresh || !before || builds[eye]!=before || std::memcmp(first,second,sizeof(first))!=0 ||
-        !std::isfinite(sign) || std::abs(std::abs(sign)-1.F)>.0001F) return {};
+    // Only aspect/shift contribute to this camera. Auxiliary matrix updates
+    // and their build counter must not invalidate unchanged window inputs.
+    const bool stable_window = first[0]==second[0] && first[1]==second[1] && first[2]==second[2];
+    if (!main.valid || !before || !stable_window) {
+        static std::atomic<unsigned> rejects{};
+        if (rejects.fetch_add(1)<128)
+            trace_event("SR window rejected eye=%u main=%u builds=%llu stable=%u scoped=%u viewport=%u",
+                eye,unsigned(main.valid),static_cast<unsigned long long>(before),unsigned(stable_window),
+                unsigned(native_gaze_projection.active),native_gaze_projection.viewport);
+        return {};
+    }
     static std::mutex published_mutex;
     static std::uint64_t last_build[2]{},last_change[2]{};
     {
@@ -5274,11 +5291,26 @@ GazeProjection cyberpunk_sbs_native_camera(const NgxParameters* parameters, unsi
         if(last_build[eye]!=before){last_build[eye]=before;last_change[eye]=now;}
         if(now<last_change[eye] || now-last_change[eye]>100) return {};
     }
-    float matrix[16]{};
-    matrix[0]=first[3];matrix[5]=first[4];matrix[8]=first[5];matrix[9]=first[6];matrix[11]=sign;
-    const auto result=gaze_projection_from_matrix(matrix);
+    const auto result=cyberpunk_sbs_window_camera(first[0],first[1],first[2],main);
+    // Record changing inputs, not just the first eight successful camera reads.
+    {
+        static std::mutex audit_mutex;
+        static float previous[2][7]{};
+        static unsigned audit_count{};
+        const float values[]{first[0],first[1],first[2],main.left,main.right,main.up,main.down};
+        std::lock_guard lock(audit_mutex);
+        bool changed=false;
+        for(unsigned i=0;i<7;++i) changed |= std::abs(previous[eye][i]-values[i])>.001F;
+        if(changed && audit_count<4096) {
+            trace_event("SR window inputs eye=%u aspect=%.6f shift=%.6f,%.6f main=%.6f,%.6f,%.6f,%.6f rawMatrix=%.6f,%.6f,%.6f,%.6f",
+                eye,first[0],first[1],first[2],main.left,main.right,main.up,main.down,
+                first[3],first[4],first[5],first[6]);
+            ++audit_count;
+        }
+        std::memcpy(previous[eye],values,sizeof(values));
+    }
     static std::atomic<unsigned> logs{};
-    if(result.valid && logs.fetch_add(1)<8) trace_event("Cyberpunk SBS native camera eye=%u builds=%llu output=%p tangents=%.5f,%.5f,%.5f,%.5f",
+    if(result.valid && logs.fetch_add(1)<8) trace_event("Cyberpunk SBS window camera eye=%u builds=%llu output=%p tangents=%.5f,%.5f,%.5f,%.5f",
         eye,static_cast<unsigned long long>(before),output,result.left,result.right,result.up,result.down);
     return result;
 }
