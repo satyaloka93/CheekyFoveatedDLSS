@@ -1,0 +1,65 @@
+Cheeky Cyberpunk RC5 test upgrade - 2026-11-05
+
+PURPOSE
+Current maintained fork, Release x64 host/runtime rebuild, including Lecram
+controls and temporal detail stability. This is a test upgrade, not a new
+upstream release or a proven fix for the previously reported RC5 launch failure.
+Base source commit b9535111133e81a8219a134132cd31b37bde3e20 plus local changes.
+
+INSTALL INTO AN EXISTING WORKING CHEEKY STANDALONE INSTALL
+1. Close Cyberpunk completely.
+2. Run Install-Cyberpunk.ps1 with PowerShell, or back up and replace ONLY:
+   bin\x64\CheekyFoveatedDLSS\CheekyFoveatedDLSSHost.dll
+   bin\x64\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll
+3. Launch normally through your existing port setup. F11 opens Cheeky with
+   the supplied user's current overlay configuration.
+This ZIP intentionally contains no root proxy DLL, NVIDIA DLL, active settings
+INI, OpenXR registration, or port binary. It is not a first-time installer.
+
+LOADER CONFLICTS / RC5
+Observed game layout:
+- bin\x64\dxgi.dll: Cheeky loader (loader log confirms system-DXGI forwarding).
+- bin\x64\version.dll: Ultimate ASI Loader. Do NOT replace it with Cheeky's
+  alternative version.dll loader. The two files have different jobs.
+- bin\x64\winmm.dll: RED4ext loader. Keep it; the port loads as a RED4ext plugin.
+- dxgi2.dll is absent in this install; the log saying it is absent is normal.
+RC5 switcher documentation says to preserve Cheeky/ReShade loaders. Its explicit
+-DisableDxgiProxy option disables dxgi; do not select that while relying on
+Cheeky's dxgi loader. Do not install both Cheeky dxgi and Cheeky version loaders.
+If ReShade, OptiScaler or another mod already owns dxgi.dll, do not overwrite it
+blindly. Cheeky's dxgi2 chaining is available but each combination needs testing;
+this upgrade does not establish or change a chain. Do not simultaneously load
+Cheeky via standalone, ReShade addon or OptiScaler ASI routes.
+This upgrade neither needs nor registers another OpenXR layer. RC5 built-in
+framegen does not require adding an external OFXR installation for this upgrade.
+The earlier RC5 failure is not attributed to dxgi without its failure logs.
+
+MENU KEY
+Existing CheekyFoveatedDLSS\CheekyOverlay.ini is preserved. Example:
+[Overlay]
+MenuKey=122
+TextScalePercent=175
+122 = F11. Use F11 for Cheeky; F10 belongs to the VR port. Edit while game closed.
+Do not replace the entire existing INI merely to change the key.
+
+NR TEST
+Settings are preserved, including NR enable state. User found high Tone strength
+suppressed the desired effect: use Tone=0 as the comparison baseline.
+Do not repeat the 12% working-scale test: that produced 60x58 per-eye NR inputs
+and two GPU hangs. Prior 78% resumed working. A minimum-size code guard has not
+been established in this build. Current saved setting may differ after tuning.
+Lecram options are experimental. Temporal stability adds GPU work/history.
+Successful evaluations are not proof of visual improvement or RC5 stability.
+
+VERIFY / TROUBLESHOOT
+bin\x64\CheekyFoveatedDLSS-Loader.log: confirms loader/chaining.
+CheekyFoveatedDLSS\CheekyFoveatedDLSS-Host.log: host/menu startup.
+CheekyFoveatedDLSS\CheekyFoveatedDLSS-Standalone.log: NR evaluation/input details.
+bin\x64\cyberpunkvrport.log: port startup; expect RED4ext plugin/no dxgi proxy.
+Menu absent: inspect loader and host logs before replacing DLLs.
+No new loader log: verify dxgi was not disabled/renamed by another installer.
+Do not treat a missing dxgi2.dll message alone as an error.
+
+ROLLBACK
+Installer prints its backup directory. With the game closed, copy its two DLLs
+back into CheekyFoveatedDLSS. Your settings/loaders are never replaced.
