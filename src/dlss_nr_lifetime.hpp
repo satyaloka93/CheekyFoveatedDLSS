@@ -7,6 +7,13 @@
 
 namespace cheeky::foveated_dlss {
 struct NrRecording;
+struct NrHistoryOrder;
+using NrHistoryTicket = std::shared_ptr<NrRecording>;
+std::shared_ptr<NrHistoryOrder> nr_history_order(ID3D12Device*) noexcept;
+NrHistoryTicket nr_history_attach(ID3D12GraphicsCommandList*,const std::shared_ptr<NrHistoryOrder>&) noexcept;
+bool nr_history_ready(const NrHistoryTicket&,const std::shared_ptr<NrHistoryOrder>&) noexcept;
+bool nr_history_tagged(ID3D12Object*) noexcept;
+void nr_history_before_execute(ID3D12CommandQueue*,ID3D12Object*) noexcept;
 using NrSignal = HRESULT (*)(ID3D12CommandQueue*, ID3D12Fence*, std::uint64_t);
 // All operations use calibration12_execution_mutex(), before any owner mutex.
 // A forwarding object's private data identifies the same recording generation.

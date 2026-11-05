@@ -11,6 +11,7 @@
 #include "dlss_nr_contract.hpp"
 #include "crop_motion.hpp"
 #include "nr_guides.hpp"
+#include "nr_temporal.hpp"
 #include "runtime.hpp"
 #include "runtime_search.hpp"
 #include "afw_compatibility.hpp"
@@ -32,6 +33,7 @@
 #include <deque>
 #include <mutex>
 #include <utility>
+#include "cvr_vector_audit.hpp"
 #include "nr_pipeline_capture.inl"
 #include "nr_vit_reuse.inl"
 
@@ -132,6 +134,8 @@ struct GpuResources {
     std::uint64_t last_use{};
     ID3D12Resource* game_output{};
     ID3D12Resource* exposure_texture{};
+    ID3D12Resource* lecram_meter{};
+    ID3D12PipelineState* meter_pipeline{};
     ID3D12Resource* original_output{};
     ID3D12Resource* color_proxy{};
     ID3D12Resource* neural_output{};
@@ -139,6 +143,7 @@ struct GpuResources {
     ID3D12RootSignature* root_signature{};
     ID3D12PipelineState* encode_pipeline{};
     ID3D12PipelineState* decode_pipeline{};
+    ID3D12PipelineState* temporal_decode_pipeline{};
     ID3D12PipelineState* border_pipeline{};
     std::uint32_t width{};
     std::uint32_t height{};
@@ -157,6 +162,7 @@ struct CachedFeature {
 };
 
 struct ViewState {
+    NrTemporalState temporal;
     NrLifetime uses;
     bool retired{};
     DlssViewId view_id{};
@@ -192,7 +198,10 @@ constexpr std::size_t retired_feature_capacity = 1U;
 constexpr std::size_t gpu_resource_cache_capacity = 6U;
 
 void release_gpu(GpuResources& gpu) noexcept {
+    release(gpu.lecram_meter);
+    release(gpu.meter_pipeline);
     release(gpu.border_pipeline);
+    release(gpu.temporal_decode_pipeline);
     release(gpu.decode_pipeline);
     release(gpu.encode_pipeline);
     release(gpu.root_signature);
@@ -245,6 +254,7 @@ void collect_retired_views() noexcept {
         } else {
             evict_retired_features(*it);
             for (auto& gpu : it->gpu_resources) gpu.uses.collect();
+            it->temporal.collect(!current_settings().nr_enabled || current_settings().nr_lecram_stability<=0.F);
             ++it;
         }
     }
@@ -616,6 +626,12 @@ void evict_retired_features(ViewState& view) noexcept {
             );
             if (FAILED(result)) return fail("CreateCommittedResource", result);
         }
+        texture.Width=texture.Height=1;
+        texture.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+        result=device->CreateCommittedResource(&heap,D3D12_HEAP_FLAG_NONE,&texture,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,nullptr,IID_PPV_ARGS(&gpu.lecram_meter));
+        if(FAILED(result)) return fail("CreateCommittedResource(Lecram meter)",result);
+        gpu.lecram_meter->SetName(L"Cheeky Lecram same-frame exposure meter");
         gpu.original_output->SetName(L"Cheeky DLSS-NR original HDR output");
         gpu.color_proxy->SetName(L"Cheeky DLSS-NR color proxy");
         gpu.neural_output->SetName(L"Cheeky DLSS-NR neural output");
@@ -623,7 +639,7 @@ void evict_retired_features(ViewState& view) noexcept {
 
     D3D12_DESCRIPTOR_HEAP_DESC descriptor_heap{};
     descriptor_heap.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    descriptor_heap.NumDescriptors = 9U;
+    descriptor_heap.NumDescriptors = 12U;
     descriptor_heap.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
     result = device->CreateDescriptorHeap(
         &descriptor_heap,
@@ -673,12 +689,24 @@ void evict_retired_features(ViewState& view) noexcept {
     cpu.ptr += gpu.descriptor_size;
     device->CreateUnorderedAccessView(game_output, nullptr, &game_uav, cpu);
 
+    auto meter_cpu=gpu.descriptors->GetCPUDescriptorHandleForHeapStart();
+    meter_cpu.ptr+=9ULL*gpu.descriptor_size;
+    auto meter_srv=fp16_srv; meter_srv.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+    device->CreateShaderResourceView(gpu.lecram_meter,&meter_srv,meter_cpu);
+    meter_cpu.ptr+=gpu.descriptor_size;
+    auto meter_uav=fp16_uav; meter_uav.Format=DXGI_FORMAT_R32G32B32A32_FLOAT;
+    device->CreateUnorderedAccessView(gpu.lecram_meter,nullptr,&meter_uav,meter_cpu);
+    meter_cpu.ptr+=gpu.descriptor_size;
+    device->CreateUnorderedAccessView(nullptr,nullptr,&meter_uav,meter_cpu);
+
     if (shared && shared->root_signature && shared->border_pipeline &&
         (gpu.border_only || (shared->encode_pipeline && shared->decode_pipeline))) {
         gpu.root_signature = shared->root_signature; gpu.root_signature->AddRef();
         gpu.border_pipeline = shared->border_pipeline; gpu.border_pipeline->AddRef();
         if (!gpu.border_only) {
+            gpu.meter_pipeline = shared->meter_pipeline; gpu.meter_pipeline->AddRef();
             gpu.encode_pipeline = shared->encode_pipeline; gpu.encode_pipeline->AddRef();
+            gpu.temporal_decode_pipeline=shared->temporal_decode_pipeline;gpu.temporal_decode_pipeline->AddRef();
             gpu.decode_pipeline = shared->decode_pipeline; gpu.decode_pipeline->AddRef();
         }
         cleanup(); return true;
@@ -691,7 +719,7 @@ void evict_retired_features(ViewState& view) noexcept {
     ranges[1].NumDescriptors = 2U;
     ranges[1].BaseShaderRegister = 0U;
     ranges[2].RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    ranges[2].NumDescriptors = 1U;
+    ranges[2].NumDescriptors = 2U;
     ranges[2].BaseShaderRegister = 3U;
     D3D12_ROOT_PARAMETER root_parameters[4]{};
     root_parameters[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -729,6 +757,9 @@ void evict_retired_features(ViewState& view) noexcept {
     D3D12_COMPUTE_PIPELINE_STATE_DESC pipeline{};
     pipeline.pRootSignature = gpu.root_signature;
     if (!gpu.border_only) {
+        pipeline.CS = {d3d_shaders::nr_meter.data,d3d_shaders::nr_meter.size};
+        result=device->CreateComputePipelineState(&pipeline,IID_PPV_ARGS(&gpu.meter_pipeline));
+        if(FAILED(result)) return fail("CreateComputePipelineState(Lecram meter)",result);
         pipeline.CS = {d3d_shaders::nr_encode.data, d3d_shaders::nr_encode.size};
         result = device->CreateComputePipelineState(
             &pipeline,
@@ -741,6 +772,9 @@ void evict_retired_features(ViewState& view) noexcept {
             IID_PPV_ARGS(&gpu.decode_pipeline)
         );
         if (FAILED(result)) return fail("CreateComputePipelineState(decode)", result);
+        pipeline.CS={d3d_shaders::nr_decode_temporal.data,d3d_shaders::nr_decode_temporal.size};
+        result=device->CreateComputePipelineState(&pipeline,IID_PPV_ARGS(&gpu.temporal_decode_pipeline));
+        if(FAILED(result))return fail("CreateComputePipelineState(temporal decode)",result);
     }
     pipeline.CS = {d3d_shaders::nr_border.data, d3d_shaders::nr_border.size};
     result = device->CreateComputePipelineState(&pipeline, IID_PPV_ARGS(&gpu.border_pipeline));
@@ -929,6 +963,14 @@ void uav_barrier(
     command_list->ResourceBarrier(1U, &barrier);
 }
 
+bool lecram_meter_usable(const DlssNrFrame& frame,const Settings& settings) noexcept {
+    if(!settings.nr_lecram_meter || !settings.nr_color_pipeline || frame.color_is_region || !frame.color) return false;
+    const auto desc=frame.color->GetDesc();
+    return frame.color_base_x<desc.Width && frame.color_base_y<desc.Height &&
+        (frame.processing_width ? frame.processing_width : frame.output_width)>0U &&
+        (frame.processing_height ? frame.processing_height : frame.output_height)>0U;
+}
+
 void dispatch_codec(
     const DlssNrFrame& frame,
     GpuResources& gpu,
@@ -936,22 +978,24 @@ void dispatch_codec(
     const std::uint32_t source_descriptor,
     const std::uint32_t destination_descriptor,
     const Settings& settings,
-    const NrRegion& region
+    const NrRegion& region,
+    NrTemporalState::Slot* temporal = nullptr
 ) noexcept {
-    ID3D12DescriptorHeap* heaps[]{gpu.descriptors};
+    auto* descriptor_heap=temporal ? temporal->heap.Get() : gpu.descriptors;
+    ID3D12DescriptorHeap* heaps[]{descriptor_heap};
     frame.command_list->SetDescriptorHeaps(1U, heaps);
     frame.command_list->SetComputeRootSignature(gpu.root_signature);
-    frame.command_list->SetPipelineState(pipeline);
-    auto handle = gpu.descriptors->GetGPUDescriptorHandleForHeapStart();
-    handle.ptr += static_cast<std::uint64_t>(source_descriptor) *
+    frame.command_list->SetPipelineState(temporal ? gpu.temporal_decode_pipeline : pipeline);
+    auto handle = descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<std::uint64_t>(temporal ? 8U : source_descriptor) *
         gpu.descriptor_size;
     frame.command_list->SetComputeRootDescriptorTable(0U, handle);
-    handle = gpu.descriptors->GetGPUDescriptorHandleForHeapStart();
-    handle.ptr += static_cast<std::uint64_t>(destination_descriptor) *
+    handle = descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += static_cast<std::uint64_t>(temporal ? 13U : destination_descriptor) *
         gpu.descriptor_size;
     frame.command_list->SetComputeRootDescriptorTable(1U, handle);
-    handle = gpu.descriptors->GetGPUDescriptorHandleForHeapStart();
-    handle.ptr += 8ULL * gpu.descriptor_size;
+    handle = descriptor_heap->GetGPUDescriptorHandleForHeapStart();
+    handle.ptr += (temporal ? 11ULL : 8ULL) * gpu.descriptor_size;
     frame.command_list->SetComputeRootDescriptorTable(3U, handle);
     const auto width = gpu.border_only ? region.width : gpu.width;
     const auto height = gpu.border_only ? region.height : gpu.height;
@@ -974,8 +1018,19 @@ void dispatch_codec(
         region.mask.count, settings.nr_reconstruction,
         settings.nr_downsample_filter | (settings.nr_upsample_filter == 2U ? 6U : settings.nr_upsample_filter << 1U), {},
         settings.nr_color_pipeline, settings.nr_signal_encoding, settings.nr_exposure_mode,
-        gpu.exposure_texture != nullptr ? 1U : 0U, settings.nr_exposure_multiplier, settings.nr_scaling_domain, {},
+        (gpu.exposure_texture != nullptr ? 1U : 0U) |
+            (lecram_meter_usable(frame,settings) ? 2U : 0U),
+        settings.nr_exposure_multiplier, settings.nr_scaling_domain, settings.nr_lecram_black_guard, settings.nr_lecram_edge_guard,
     };
+    if(pipeline==gpu.meter_pipeline) {
+        const auto desc=frame.color->GetDesc();
+        constants.source_base[0]=frame.color_base_x; constants.source_base[1]=frame.color_base_y;
+        constants.source_size[0]=(std::min)(frame.processing_width ? frame.processing_width : frame.output_width,
+            static_cast<std::uint32_t>(desc.Width)-frame.color_base_x);
+        constants.source_size[1]=(std::min)(frame.processing_height ? frame.processing_height : frame.output_height,
+            desc.Height-frame.color_base_y);
+    }
+    if(temporal) constants.filter_flags |= 8U;
     std::memcpy(constants.mask_bounds, region.mask.bounds, sizeof(constants.mask_bounds));
     static_assert(sizeof(constants)==48*sizeof(std::uint32_t));
     if(frame.diagnostic_capture) std::memcpy(gpu.capture_constants.data(),&constants,sizeof(constants));
@@ -987,8 +1042,8 @@ void dispatch_codec(
     if (gpu.exposure_texture) transition(frame.command_list, gpu.exposure_texture,
         frame.exposure_state, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     frame.command_list->Dispatch(
-        (dispatch_width + 15U) / 16U,
-        (dispatch_height + 15U) / 16U,
+        pipeline==gpu.meter_pipeline ? 1U : (dispatch_width + 15U) / 16U,
+        pipeline==gpu.meter_pipeline ? 1U : (dispatch_height + 15U) / 16U,
         1U
     );
     if (gpu.exposure_texture) transition(frame.command_list, gpu.exposure_texture,
@@ -1227,7 +1282,8 @@ bool evaluate_dlss_nr_internal(
         const char* reason = "accepted";
         if (settings.nr_color_pipeline && settings.nr_exposure_mode)
             static_cast<void>(supported_exposure(frame, &reason));
-        diagnostics.exposure_source = !settings.nr_color_pipeline ? "Legacy pipeline (bridge exposure unused)" :
+        diagnostics.exposure_source = lecram_meter_usable(frame,settings)
+            ? "Lecram whole-view GPU meter (manual trim applied)" : !settings.nr_color_pipeline ? "Legacy pipeline (bridge exposure unused)" :
             !settings.nr_exposure_mode ? "Texture exposure off; manual multiplier only" :
             gpu->exposure_texture ? "Game exposure texture bound (GPU validates texel)" : reason;
     }
@@ -1335,7 +1391,12 @@ bool evaluate_dlss_nr_internal(
         (view.history.x != history.x || view.history.y != history.y);
     ++view.history_calls;
     if (moved) ++view.history_moves;
-    if (reset) ++view.history_resets;
+    if (reset) {
+        ++view.history_resets;
+        trace_event("DLSS-NR Lecram view=%llu pipeline=%u meterRequested=%u meterActive=%u blackGuard=%.3f edgeGuard=%.3f",
+            static_cast<unsigned long long>(frame.view_id),settings.nr_color_pipeline,settings.nr_lecram_meter?1U:0U,
+            lecram_meter_usable(frame,settings)?1U:0U,settings.nr_lecram_black_guard,settings.nr_lecram_edge_guard);
+    }
     const bool corrected = offset.x != 0.0F || offset.y != 0.0F;
     if (corrected) ++view.history_corrections;
     const bool compensation_failed = reset_reason != nullptr &&
@@ -1387,6 +1448,12 @@ bool evaluate_dlss_nr_internal(
         frame.color_state,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
     );
+    if(lecram_meter_usable(frame,settings)) {
+        transition(frame.command_list,gpu->lecram_meter,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        dispatch_codec(frame,*gpu,gpu->meter_pipeline,0U,10U,settings,codec_region);
+        uav_barrier(frame.command_list,gpu->lecram_meter);
+        transition(frame.command_list,gpu->lecram_meter,D3D12_RESOURCE_STATE_UNORDERED_ACCESS,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    }
     dispatch_codec(
         frame,
         *gpu,
@@ -1410,6 +1477,34 @@ bool evaluate_dlss_nr_internal(
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
     );
+
+    // Optional Cyberpunk-owned diagnostic, same command list and frame/eye TLS.
+    // No export in other games: no capture and no change to NR parameters.
+    if (const auto module=GetModuleHandleW(L"CyberpunkVR_Stereo.dll")) {
+        const auto getContext=reinterpret_cast<CvrVectorContextFn>(GetProcAddress(module,"CyberpunkVR_VectorAuditContext"));
+        const auto record=reinterpret_cast<CvrVectorRecordFn>(GetProcAddress(module,"CyberpunkVR_RecordVectorAudit"));
+        const auto token=getContext ? getContext() : 0;
+        if (token && record && !(frame.view_id & ((1ull<<63)|(1ull<<61)))) {
+            CvrVectorPacket packet{};packet.size=sizeof(packet);packet.version=1;
+            packet.frame=uint32_t((token-1)/2);packet.eye=uint32_t((token-1)%2);packet.stage=1;
+            packet.plane[0]={frame.color,uint32_t(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),frame.color_base_x,frame.color_base_y,frame.output_width,frame.output_height};
+            packet.plane[1]={frame.motion_vectors,uint32_t(frame.motion_state),frame.motion_base_x,frame.motion_base_y,frame.motion_width,frame.motion_height};
+            packet.plane[2]={frame.depth,uint32_t(frame.depth_state),frame.depth_base_x,frame.depth_base_y,frame.depth_width,frame.depth_height};
+            packet.motionScale[0]=frame.motion_uv_scale_x;packet.motionScale[1]=frame.motion_uv_scale_y;
+            packet.jitterUV[0]=frame.jitter_uv_x;packet.jitterUV[1]=frame.jitter_uv_y;
+            packet.reset=reset;packet.regionCropped=frame.color_is_region;packet.depthInverted=frame.depth_inverted;packet.motionJittered=frame.motion_vectors_jittered;
+            record(frame.command_list,&packet);
+            packet.stage=2;
+            packet.regionCropped=region.base_x || region.base_y || region.width!=processing_width || region.height!=processing_height;
+            packet.depthInverted=settings.nr_depth_convention==1U ? 0U : settings.nr_depth_convention==2U ? 1U : frame.depth_inverted;
+            packet.plane[0]={gpu->color_proxy,uint32_t(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),0,0,working_width,working_height};
+            packet.plane[1]={motion_vectors,uint32_t(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),0,0,working_width,working_height};
+            packet.plane[2]={gpu->guides.depth.Get(),uint32_t(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),0,0,working_width,working_height};
+            packet.motionScale[0]=packet.motionScale[1]=1.0f;
+            packet.motionJittered=0;
+            record(frame.command_list,&packet);
+        }
+    }
 
     parameters->Set("DLSSNR.Color", gpu->color_proxy);
     parameters->Set("DLSSNR.Output", gpu->neural_output);
@@ -1474,6 +1569,7 @@ bool evaluate_dlss_nr_internal(
         static_cast<std::uint64_t>(region.width) * region.height * 8U +
         static_cast<std::uint64_t>(working_width) * working_height * 28U;
     if (!ngx_succeeded(result)) {
+        view.temporal.invalidate();
         transition(
             frame.command_list,
             gpu->original_output,
@@ -1510,6 +1606,16 @@ bool evaluate_dlss_nr_internal(
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE
     );
+    NrTemporalState::Slot* temporal{};
+    if(settings.nr_lecram_stability>0.F && settings.nr_color_pipeline && !nr_pipeline_capture_busy()) {
+        temporal=view.temporal.dispatch(frame.command_list,gpu->original_output,gpu->color_proxy,
+            gpu->neural_output,motion_vectors,gpu->guides.depth.Get(),gpu->exposure_texture,gpu->lecram_meter,frame.color,
+            working_width,working_height,view.history_calls,reset,depth_inverted,settings.nr_lecram_stability);
+    } else view.temporal.collect(true);
+    diagnostics.temporal_reason=view.temporal.reason;
+    diagnostics.temporal_filtered=0;diagnostics.temporal_fresh=0;diagnostics.temporal_fallbacks=0;
+    for(const auto& v:views){diagnostics.temporal_filtered+=v.temporal.filtered;diagnostics.temporal_fresh+=v.temporal.fresh_frames;diagnostics.temporal_fallbacks+=v.temporal.fallbacks;}
+    diagnostics.temporal_bytes=NrTemporalState::allocated_bytes;
     transition(
         frame.command_list,
         frame.color,
@@ -1523,7 +1629,7 @@ bool evaluate_dlss_nr_internal(
         1U,
         6U,
         settings,
-        codec_region
+        codec_region, temporal
     );
     uav_barrier(frame.command_list, frame.color);
     if(frame.diagnostic_capture) {
@@ -1571,6 +1677,8 @@ bool evaluate_dlss_nr_internal(
     diagnostics.state = DlssNrState::active;
     if (diagnostics.evaluation_calls == 1U ||
         diagnostics.evaluation_calls % 300U == 0U) {
+        if(settings.nr_lecram_stability>0.F) trace_event("DLSS-NR temporal strength=%.3f historyEligible=%llu fresh=%llu fallback=%llu bytes=%llu reason=%s",
+            settings.nr_lecram_stability,diagnostics.temporal_filtered,diagnostics.temporal_fresh,diagnostics.temporal_fallbacks,diagnostics.temporal_bytes,diagnostics.temporal_reason);
         trace_event(
             "DLSS-NR active route=%s view=%llu region=%ux%u@%u,%u "
             "working=%ux%u evaluations=%llu colorPipeline=%u signal=%u scalingDomain=%u exposureMode=%u exposureTexture=%s exposureMultiplier=%.4f",
@@ -1789,13 +1897,14 @@ DlssNrSnapshot dlss_nr_snapshot() noexcept {
     std::lock_guard execution_lock(calibration12_execution_mutex());
     std::lock_guard lock(nr_mutex);
     auto result = diagnostics;
+    result.temporal_bytes=NrTemporalState::allocated_bytes;
     result.retained_texture_bytes = result.active_features = result.cached_features = result.retiring_views = 0;
     for (const auto& view : views) {
         result.active_features += view.handle != nullptr;
         result.cached_features += view.retired_features.size();
         result.retiring_views += view.retired;
         for (const auto& gpu : view.gpu_resources) {
-            for (auto* texture : {gpu.original_output, gpu.color_proxy, gpu.neural_output,
+            for (auto* texture : {gpu.original_output, gpu.color_proxy, gpu.neural_output, gpu.lecram_meter,
                     gpu.guides.motion.Get(), gpu.guides.depth.Get()}) {
                 if (!texture || !runtime.device) continue;
                 const auto desc = texture->GetDesc();
@@ -1804,6 +1913,7 @@ DlssNrSnapshot dlss_nr_snapshot() noexcept {
             }
         }
     }
+    result.retained_texture_bytes+=NrTemporalState::allocated_bytes;
     return result;
 }
 

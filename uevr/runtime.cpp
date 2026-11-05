@@ -53,6 +53,9 @@ struct State {
     FrameCadence cadence;
     ULONGLONG next_timing_log{};
     bool nr_comparison{};
+    unsigned nr_path_stage{};
+    std::filesystem::path nr_path_root;
+    std::string nr_path_status{"Idle"};
     Settings nr_comparison_original{};
     ULONGLONG nr_comparison_deadline{};
     std::string message{"Not initialized"};
@@ -84,6 +87,43 @@ const char* host_label(CheekyRuntimeHost host) noexcept {
     return "Unknown host";
 }
 
+void finish_nr_path_test(State& s, const char* reason) {
+    cancel_nr_pipeline_capture();
+    update_settings(s.nr_comparison_original);
+    s.nr_path_stage=0;s.nr_comparison=false;++s.revision;
+    s.nr_path_status=std::string(reason)+"; original settings restored. Files: "+s.nr_path_root.string();
+    s.message=s.nr_path_status;
+    std::ofstream(s.nr_path_root/"result.txt")<<s.nr_path_status;
+}
+bool start_nr_path_stage(State& s, unsigned stage) {
+    try {
+    auto test=s.nr_comparison_original;
+    test.nr_enabled=true; test.nr_second_pass=false; test.nr_third_pass=false;
+    test.nr_processing_order=NrProcessingOrder::after_upscaling;
+    test.nr_working_scale=1.F;test.nr_vit_reuse=false;
+    test.nr_color_pipeline=stage==1 ? 0U : 1U;
+    test.nr_signal_encoding=0;test.nr_scaling_domain=2;test.nr_exposure_mode=0;
+    test.nr_exposure_multiplier=1.F;test.nr_paper_white_scale=1.F;
+    test.nr_hdr_transfer_strength=1.F;test.nr_color_strength=1.F;
+    test.nr_reconstruction=1;test.nr_downsample_filter=1;test.nr_upsample_filter=1;
+    test.nr_alignment_border_enabled=false;
+    const auto directory=s.nr_path_root/(stage==1 ? "01-legacy" : "02-normalized-srgb");
+    std::filesystem::create_directories(directory);
+    std::ofstream(directory/"settings.ini")<<serialize_settings(test);
+    update_settings(test);++s.revision;
+    if(!request_nr_pipeline_capture(directory)) return false;
+    s.nr_path_stage=stage;
+    s.nr_path_status=stage==1 ? "1/2 Legacy: close menu; capture in 10 seconds" : "2/2 Normalized sRGB: capture in 10 seconds";
+    return true;
+    } catch (...) { return false; }
+}
+void tick_nr_path_test(State& s) {
+    if(!s.nr_path_stage || nr_pipeline_capture_busy()) return;
+    if(nr_pipeline_capture_saved()<2) {finish_nr_path_test(s,"Incomplete capture (fewer than two view chains); retry in gameplay");return;}
+    if(s.nr_path_stage==2) {finish_nr_path_test(s,"Both stages captured");return;}
+    if(!start_nr_path_stage(s,2)) finish_nr_path_test(s,"Could not arm normalized stage");
+}
+
 std::string snapshot_locked(State& s) {
     std::ostringstream out; out.imbue(std::locale::classic()); out << std::boolalpha << std::setprecision(6);
     const auto observer = native_observer_status();
@@ -108,6 +148,8 @@ std::string snapshot_locked(State& s) {
         << "\",\"settings\":" << settings_json(configured_settings())
         << ",\"setting_groups\":" << setting_groups_json()
         << ",\"nr_pipeline_capture\":\"" << json_escape(nr_pipeline_capture_status()) << "\""
+        << ",\"nr_path_test\":\"" << json_escape(s.nr_path_status) << "\""
+        << ",\"nr_path_active\":" << (s.nr_path_stage != 0)
         << ",\"nr_previous_active\":" << s.nr_previous
         << ",\"nr_previous_next\":" << s.nr_previous_next
         << ",\"d3d12_lower_hook_active\":" << d3d12_lower_hook_enabled()
@@ -208,6 +250,11 @@ std::string snapshot_locked(State& s) {
         << ",\"processing_order\":" << static_cast<unsigned>(nr.processing_order)
         << ",\"processing_width\":" << nr.processing_width << ",\"processing_height\":" << nr.processing_height
         << ",\"hdr_input\":" << (nr.hdr_input ? "true" : "false")
+        << ",\"temporal_filtered\":" << nr.temporal_filtered
+        << ",\"temporal_fresh\":" << nr.temporal_fresh
+        << ",\"temporal_fallbacks\":" << nr.temporal_fallbacks
+        << ",\"temporal_bytes\":" << nr.temporal_bytes
+        << ",\"temporal_reason\":\"" << json_escape(nr.temporal_reason ? nr.temporal_reason : "Off") << "\""
         << ",\"exposure_source\":\"" << json_escape(nr.exposure_source ? nr.exposure_source : "Not evaluated yet") << "\""
         << ",\"exposure_multiplier\":" << nr.exposure_multiplier
         << ",\"exposure_view\":" << nr.exposure_view
@@ -530,6 +577,9 @@ extern "C" __declspec(dllexport) void CheekyRuntime_Tick(std::uint64_t attachmen
         auto& s = state(); std::lock_guard lock(s.mutex);
         if (!attachment || !adapter_attached.load() || attachment != active_attachment.load()) return;
         configure_graphics(s, renderer, device, queue);
+        tick_nr_path_test(s);
+        if (s.nr_path_stage && GetTickCount64() > s.nr_comparison_deadline)
+            finish_nr_path_test(s,"Test timed out");
         if (s.nr_comparison && GetTickCount64() > s.nr_comparison_deadline) {
             update_settings(s.nr_comparison_original); s.nr_comparison = false;
             s.message = "NR comparison timed out; original settings restored";
@@ -595,6 +645,24 @@ extern "C" __declspec(dllexport) bool CheekyRuntime_Command(std::uint64_t attach
         if (parsed.ec != std::errc{} || parsed.ptr != request.data()+request.size()) return false;
         s.request = id;
         if (action == "get") return true;
+        if(action=="nr_path_test_cancel") {
+            if(s.nr_path_stage) finish_nr_path_test(s,"Test cancelled");
+            return true;
+        }
+        if(action=="nr_path_test_begin") {
+            if(s.nr_comparison || nr_pipeline_capture_busy() || s.renderer!=1 || !s.graphics_ready || !configured_settings().nr_enabled) {
+                s.message="Enable D3D12 NR and finish other captures/comparisons first";return false;
+            }
+            s.nr_path_root=s.directory/"nr-path-tests"/(std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount64()));
+            std::filesystem::create_directories(s.nr_path_root);
+            s.nr_comparison_original=configured_settings();
+            std::ofstream(s.nr_path_root/"original-settings.ini")<<serialize_settings(s.nr_comparison_original);
+            std::ofstream(s.nr_path_root/"runtime-snapshot.json")<<snapshot_locked(s);
+            s.nr_comparison=true;s.nr_comparison_deadline=GetTickCount64()+180000;
+            if(!start_nr_path_stage(s,1)) {finish_nr_path_test(s,"Could not arm Legacy stage");return false;}
+            return true;
+        }
+        if(s.nr_path_stage) {s.message="Finish or cancel NR color-path test before other commands";return false;}
         if (action == "capture_nr_pipeline") {
             if(s.nr_comparison || !configured_settings().nr_enabled || s.renderer!=1) {
                 s.message="Enable D3D12 NR and finish comparison first";return false;

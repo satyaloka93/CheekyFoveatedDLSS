@@ -3,12 +3,21 @@
 #include "graphics_observer.hpp"
 #include "d3d12_native.hpp"
 #include <atomic>
+#include <algorithm>
 #include <vector>
 #include <wrl/client.h>
 
 namespace cheeky::foveated_dlss {
 using Microsoft::WRL::ComPtr;
+struct NrHistoryOrder {
+    ComPtr<ID3D12Fence> fence;
+    ComPtr<ID3D12CommandQueue> queue;
+    std::uint64_t value{};
+    bool valid{true};
+};
 struct NrRecording {
+    std::vector<std::shared_ptr<NrHistoryOrder>> history_orders;
+    std::uint64_t submissions{};
     struct Point {
         ComPtr<ID3D12CommandQueue> queue;
         ComPtr<ID3D12Fence> fence;
@@ -120,6 +129,13 @@ void nr_recording_submitted(ID3D12CommandQueue* queue, ID3D12Object* list, NrSig
     const auto tag = identity(list);
     if (!tag || !tag->current) return;
     auto& recording = *tag->current;
+    ++recording.submissions;
+    for(auto& order:recording.history_orders) {
+        // Every read and write joins the same per-view GPU timeline, including replay.
+        const auto next=++order->value;
+        if(FAILED((submit_signal ? submit_signal : signal)(queue,order->fence.Get(),next))) order->valid=false;
+        order->queue=queue;
+    }
     // Never share fence values between independent queues: completing one
     // queue must not satisfy a blocked execution on another queue.
     auto found = recording.points.end();
@@ -133,6 +149,34 @@ void nr_recording_submitted(ID3D12CommandQueue* queue, ID3D12Object* list, NrSig
     ++found->value;
     found->needs_signal = true;
     signal_point(recording, *found, submit_signal ? submit_signal : signal);
+}
+std::shared_ptr<NrHistoryOrder> nr_history_order(ID3D12Device* device) noexcept {
+    auto order=std::make_shared<NrHistoryOrder>();
+    if(!device || FAILED(device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&order->fence)))) return {};
+    return order;
+}
+NrHistoryTicket nr_history_attach(ID3D12GraphicsCommandList* list,const std::shared_ptr<NrHistoryOrder>& order) noexcept {
+    std::lock_guard lock(calibration12_execution_mutex());
+    if(!order || !order->valid || !ensure_dlss_nr_recording(list)) return {};
+    auto current=identity(list)->current;
+    if(std::find(current->history_orders.begin(),current->history_orders.end(),order)==current->history_orders.end()) current->history_orders.push_back(order);
+    return current;
+}
+bool nr_history_ready(const NrHistoryTicket& ticket,const std::shared_ptr<NrHistoryOrder>& order) noexcept {
+    std::lock_guard lock(calibration12_execution_mutex());
+    return ticket && ticket->submissions==1 && order && order->valid && order->fence->GetCompletedValue()!=UINT64_MAX;
+}
+bool nr_history_tagged(ID3D12Object* list) noexcept {
+    const auto tag=identity(list);
+    return tag && tag->current && !tag->current->history_orders.empty();
+}
+void nr_history_before_execute(ID3D12CommandQueue* queue,ID3D12Object* list) noexcept {
+    std::lock_guard lock(calibration12_execution_mutex());
+    const auto tag=identity(list);if(!tag || !tag->current) return;
+    for(auto& order:tag->current->history_orders) {
+        if(order->valid && order->value && order->queue.Get()!=queue &&
+            FAILED(queue->Wait(order->fence.Get(),order->value))) order->valid=false;
+    }
 }
 bool nr_recording_tagged(ID3D12Object* list) noexcept {
     return list && identity(list) != nullptr;

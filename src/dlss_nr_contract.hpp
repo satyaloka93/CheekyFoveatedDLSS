@@ -12,6 +12,10 @@ inline void apply_shared_nr_normalization(Settings& pass, const Settings& master
     pass.nr_paper_white_scale = master.nr_paper_white_scale;
     pass.nr_exposure_mode = master.nr_exposure_mode;
     pass.nr_exposure_multiplier = master.nr_exposure_multiplier;
+    pass.nr_lecram_stability = master.nr_lecram_stability;
+    pass.nr_lecram_edge_guard = master.nr_lecram_edge_guard;
+    pass.nr_lecram_black_guard = master.nr_lecram_black_guard;
+    pass.nr_lecram_meter = master.nr_lecram_meter;
 }
 
 struct NrRegion {

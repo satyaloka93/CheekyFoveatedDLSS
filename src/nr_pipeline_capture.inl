@@ -115,7 +115,7 @@ void record_nr_pixel_pass(const DlssNrFrame& frame,const Settings& settings,
             NrCapturePlane p;p.source=resource;p.name=name;p.state=state;p.box={x,y,0,x+width,y+height,1};
             auto cropped=desc;cropped.Width=width;cropped.Height=height;cropped.MipLevels=1;
             job->device->GetCopyableFootprints(&cropped,0,1,0,&p.footprint,nullptr,nullptr,&p.bytes);
-            if(p.bytes==UINT64_MAX || p.bytes>32*1024*1024 || total+p.bytes>64*1024*1024)
+            if(p.bytes==UINT64_MAX || p.bytes>32*1024*1024 || total+p.bytes>96*1024*1024)
                 throw std::runtime_error("Capture size limit exceeded");
             total+=p.bytes;
             D3D12_HEAP_PROPERTIES heap{};heap.Type=D3D12_HEAP_TYPE_READBACK;
@@ -185,6 +185,17 @@ bool request_nr_pipeline_capture(const std::filesystem::path& directory) noexcep
         c.ready=c.generation+10000;c.deadline=c.ready+30000;c.accepted=c.saved=0;c.views[0]=c.views[1]=0;c.armed=true;
         c.status="Armed: close menus; capture starts in 10 seconds";return true;
     } catch(...) {c.status="Cannot create diagnostic folder";return false;}
+}
+bool nr_pipeline_capture_busy() {
+    auto& c=nr_capture_controller();std::lock_guard lock(c.mutex);
+    return c.armed || !c.pending.empty() || c.writing;
+}
+unsigned nr_pipeline_capture_saved() {
+    auto& c=nr_capture_controller();std::lock_guard lock(c.mutex);return c.saved;
+}
+void cancel_nr_pipeline_capture() {
+    auto& c=nr_capture_controller();std::lock_guard lock(c.mutex);
+    c.armed=false; // Pending GPU work retains ownership until safely retired.
 }
 std::string nr_pipeline_capture_status() {
     auto& c=nr_capture_controller();std::lock_guard lock(c.mutex);return c.status;

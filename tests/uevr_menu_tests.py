@@ -788,6 +788,17 @@ def run(engine):
         count = len(g.sent)
         draw(click="Capture NR pipeline (10 seconds)")
         assert len(g.sent) == count, "Unsupported capture command dispatched"
+    state["renderer"] = 1
+    state["settings"]["NrEnabled"] = True
+    state["nr_path_test"] = "Idle"
+    state["nr_path_active"] = False
+    receive(state)
+    draw(click="Test Legacy vs normalized (auto capture)")
+    assert last().endswith("\nnr_path_test_begin")
+    state["nr_path_active"] = True
+    receive(state)
+    draw(click="Cancel color-path test")
+    assert last().endswith("\nnr_path_test_cancel")
     del state["nr_pipeline_capture"]
     receive(state)
     draw()

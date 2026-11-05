@@ -27,7 +27,10 @@ SHADERS = [
     ("peripheral12_depth", "src/peripheral_shaders.hpp", "depth_downsample_shader_source", "Main", "cs_5_1", 3),
     ("peripheral12_rr", "src/peripheral_shaders.hpp", "rr_guide_downsample_shader_source", "Main", "cs_5_1", 3),
     ("nr_guides", "src/nr_guide_shader.hpp", "nr_guide_shader", "main", "cs_5_0", 1),
+    ("nr_temporal", "src/nr_temporal_shader.hpp", "nr_temporal_shader", "main", "cs_5_1", 3),
+    ("nr_meter", "src/nr_meter_shader.hpp", "nr_meter_shader", "MeterMain", "cs_5_1", 3),
     ("nr_encode", "src/nr_codec_shader.hpp", "nr_codec_shader", "EncodeMain", "cs_5_1", 3),
+    ("nr_decode_temporal", "src/nr_codec_shader.hpp", "nr_codec_shader", "DecodeMain", "cs_5_1", 3),
     ("nr_decode", "src/nr_codec_shader.hpp", "nr_codec_shader", "DecodeMain", "cs_5_1", 3),
     ("nr_border", "src/nr_codec_shader.hpp", "nr_codec_shader", "BorderMain", "cs_5_0", 1),
     ("debug_marker12", "src/debug_marker12.hpp", "source", "main", "cs_5_0", 3),
@@ -36,10 +39,10 @@ SHADERS = [
 
 def source_for(path: Path, symbol: str) -> str:
     text = path.read_text(encoding="utf-8")
-    match = re.search(r"\b" + re.escape(symbol) + r'\[\]\s*=\s*R"\((.*?)\)";', text, re.S)
+    match = re.search(r"\b" + re.escape(symbol) + r'\[\]\s*=\s*((?:R"\(.*?\)"\s*)+);', text, re.S)
     if not match:
         raise ValueError(f"Missing shader source {symbol} in {path}")
-    return match.group(1)
+    return "".join(re.findall(r'R"\((.*?)\)"', match.group(1), re.S))
 
 
 def main() -> None:
@@ -61,7 +64,7 @@ def main() -> None:
         for name, file, symbol, entry, profile, optimization in SHADERS:
             hlsl = temp / f"{name}.hlsl"
             compiled = temp / f"{name}.cso"
-            hlsl.write_text(source_for(ROOT / file, symbol), encoding="utf-8")
+            hlsl.write_text(("#define CHEEKY_NR_TEMPORAL 1\n" if name=="nr_decode_temporal" else "")+source_for(ROOT / file, symbol), encoding="utf-8")
             subprocess.run(
                 [str(args.fxc), "/nologo", f"/O{optimization}", "/T", profile,
                  "/E", entry, "/Fo", str(compiled), str(hlsl)],

@@ -36,6 +36,7 @@ std::string snapshot(CheekyHostSnapshotFn get) {
 }
 int main(int argc,char** argv) {
     try {
+        setvbuf(stdout,nullptr,_IONBF,0);
         const std::string mode=argc>1 ? argv[1] : "dx12";
         const bool previous_nr=mode=="dx12-previous-nr";
         if(previous_nr) SetEnvironmentVariableW(L"CHEEKY_TEST_PREVIOUS_NR",L"1");

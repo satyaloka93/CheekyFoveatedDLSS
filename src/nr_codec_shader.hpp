@@ -21,7 +21,8 @@ struct CodecConstants {
         float mask_bounds[4][4];
         std::uint32_t color_pipeline, signal_encoding, exposure_mode, exposure_available;
         float exposure_multiplier;
-        std::uint32_t scaling_domain, color_padding[2];
+        std::uint32_t scaling_domain;
+        float lecram_black_guard, lecram_edge_guard;
     };
     static_assert(sizeof(CodecConstants) == 48U * sizeof(std::uint32_t));
 inline constexpr char nr_codec_shader[] = R"(
@@ -30,6 +31,7 @@ Texture2D<float4> Source1 : register(t1);
 Texture2D<float4> Source2 : register(t2);
 #ifndef CHEEKY_NR_NO_EXPOSURE
 Texture2D<float4> Exposure : register(t3);
+Texture2D<float4> LecramMeter : register(t4);
 #endif
 RWTexture2D<float4> Output0 : register(u0);
 RWTexture2D<float4> Output1 : register(u1);
@@ -60,7 +62,8 @@ cbuffer CodecConstants : register(b0) {
     uint ExposureAvailable;
     float ExposureMultiplier;
     uint ScalingDomain;
-    uint2 ColorPadding;
+    float LecramBlackGuard;
+    float LecramEdgeGuard;
 };
 
 float FoveationShapeDistance(float2 pixel) {
@@ -146,10 +149,14 @@ float3 SignalConvert(float3 rgb, uint encoding, bool encode) {
 float EffectiveExposure() {
     float value=1.0;
 #ifndef CHEEKY_NR_NO_EXPOSURE
-    if (ExposureAvailable != 0U && ExposureMode != 0U) value=Exposure.Load(int3(0,0,0)).r;
+    if ((ExposureAvailable & 1U) != 0U && ExposureMode != 0U) value=Exposure.Load(int3(0,0,0)).r;
 #endif
     if (!isfinite(value) || value <= 0.0) value=1.0;
     if (ExposureMode == 2U) value=1.0/value;
+#ifndef CHEEKY_NR_NO_EXPOSURE
+    // Explicit frame-meter mode replaces game exposure, preserving manual trim.
+    if ((ExposureAvailable & 2U) != 0U) value=LecramMeter.Load(int3(0,0,0)).r;
+#endif
     // Finite safety bounds intentionally exceed ordinary exposure ranges.
     return clamp(value*ExposureMultiplier,0.000001,1000000.0);
 }
@@ -190,6 +197,9 @@ float4 LoadFilterProxy(int2 p) {
 }
 float4 LoadFilterNeural(int2 p) {
     float4 value=Source2.Load(int3(p,0));
+#ifdef CHEEKY_NR_TEMPORAL
+    value.rgb+=Source1.Load(int3(p,0)).rgb;
+#endif
     if (ColorPipeline != 0U) value.rgb=ScaleEncode(SignalConvert(value.rgb,SignalEncoding,false));
     return value;
 }
@@ -311,6 +321,32 @@ float3 UpgradeToneMap(float3 original, float3 proxy, float3 neural) {
     return lerp(original, max(neural * ratio, 0.0), TransferStrength);
 }
 
+)" R"(
+// Controls affect the NR correction, never the original image by itself.
+float3 LecramProtect(float3 original,float3 edited,uint2 pixel) {
+    if(LecramBlackGuard==0.0 && LecramEdgeGuard==0.0) return edited;
+    float3 o=ColorPipeline==2U ? SignalConvert(original,0U,false) : original;
+    float3 e=ColorPipeline==2U ? SignalConvert(edited,0U,false) : edited;
+    float y=max(Luminance(o),0.0)/max(PaperWhiteScale,0.0001);
+    float3 delta=e-o;
+    float lift=LecramBlackGuard*(1.0-smoothstep(0.0,0.02,y));
+    float edge=0.0;
+    if(LecramEdgeGuard>0.0) {
+        float low=y;
+        [unroll] for(int j=-1;j<=1;++j) [unroll] for(int i=-1;i<=1;++i) {
+            int2 p=clamp(int2(pixel)+int2(i,j),int2(0,0),int2(Size)-1);
+            float3 neighbor=Source0.Load(int3(p,0)).rgb;
+            if(ColorPipeline==2U) neighbor=SignalConvert(neighbor,0U,false);
+            low=min(low,max(Luminance(neighbor),0.0)/max(PaperWhiteScale,0.0001));
+        }
+        edge=LecramEdgeGuard*smoothstep(0.1,0.6,(y-low)/max(y,0.0001))*smoothstep(0.02,0.18,y);
+    }
+    // Scale all channels together to preserve correction hue.
+    float factor=Luminance(delta)>0.0 ? 1.0-lift : 1.0-edge;
+    float3 result=o+delta*factor;
+    return ColorPipeline==2U ? SignalConvert(result,0U,true) : result;
+}
+
 [numthreads(16, 16, 1)]
 void EncodeMain(uint3 dispatch_id : SV_DispatchThreadID) {
     if (all(dispatch_id.xy < Size)) {
@@ -397,7 +433,8 @@ void DecodeMain(uint3 dispatch_id : SV_DispatchThreadID) {
         const float3 basis=ScaleEncode(BridgeEncode(original_sample.rgb));
         const float3 edited=Reconstruction == 1U
             ? basis+neural_sample.rgb-proxy_sample.rgb : neural_sample.rgb;
-        const float3 restored=BridgeRestore(ScaleDecode(edited),original_sample.rgb);
+        const float3 restored=LecramProtect(original_sample.rgb,
+            BridgeRestore(ScaleDecode(edited),original_sample.rgb),dispatch_id.xy);
         Output0[SourceBase + dispatch_id.xy]=float4(lerp(original_sample.rgb,restored,
             TransferStrength*ColorStrength*foveation_weight),original_sample.a);
         return;

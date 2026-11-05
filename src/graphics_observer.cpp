@@ -273,8 +273,11 @@ void execute(ExecuteFn real_execute, ID3D12CommandQueue* queue, UINT count, ID3D
         real_execute(queue, count, lists);
     } else {
         std::lock_guard execution_lock(calibration12_execution_mutex());
-        real_execute(queue, count, lists);
+        bool ordered=false;
+        for(UINT i=0;i<count;++i) if(lists[i] && nr_history_tagged(lists[i])) ordered=true;
+        if(!ordered) real_execute(queue,count,lists);
         for (UINT i = 0; i < count; ++i) {
+            if(ordered) {nr_history_before_execute(queue,lists[i]);real_execute(queue,1,lists+i);}
             ComPtr<ID3D12GraphicsCommandList> graphics;
             if (lists[i] && SUCCEEDED(lists[i]->QueryInterface(IID_PPV_ARGS(&graphics)))) {
                 nr_recording_submitted(queue, graphics.Get());

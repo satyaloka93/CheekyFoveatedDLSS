@@ -679,6 +679,21 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                         slider("Legacy correction blend", "NrColorStrength", 0, 2)
                         text("Legacy HDR uses separate tone-map transfer math. Bridge modes show one NR output blend.")
                     end
+                if imgui.tree_node("Lecram controls") then
+                    selection_help("Experimental, Lecram-inspired controls. Shared by all passes. Requires a bridge color pipeline; Legacy leaves these inactive. D3D12 NR only.")
+                    check("Automatic input exposure", "NrLecramMeter")
+                    selection_help("Meters the whole eye each pass, independent of gaze. Replaces game exposure; manual exposure/reference white still trim the result. Adds one small GPU dispatch. Cropped-only inputs keep existing exposure.")
+                    slider("Near-black lift protection", "NrLecramBlackGuard", 0, 1)
+                    selection_help("Reduces NR haze near black. 0 = unchanged; 1 = strongest. Does not darken the original image.")
+                    slider("Bright-edge darkening protection", "NrLecramEdgeGuard", 0, 1)
+                    slider("Temporal detail stability", "NrLecramStability", 0, 1)
+                    selection_help("0 = off. Smooths NR detail with motion and the previous eye/pass result; NR still runs every frame. Start at 0.3. Higher values can soften moving detail. Adds GPU work and bounded history memory. Invalid history uses fresh NR.")
+                    if imgui.button("Reset Lecram controls") then
+                        for key, value in pairs({NrLecramMeter=false,NrLecramBlackGuard=0,NrLecramEdgeGuard=0,NrLecramStability=0}) do draft[key],dirty[key],ready_edits[key]=value,value,value end
+                    end
+                    selection_help("Reduces NR darkening on the bright side of sharp edges. May weaken intentional contact shadows. 0 = unchanged; 1 = strongest.")
+                    imgui.tree_pop()
+                end
                 if imgui.tree_node("Input normalization - all passes") then
                     if status.settings.NrExposureMultiplier ~= nil then
                         combo("NR exposure texture", "NrExposureMode", {[0]="Off",[1]="Multiply",[2]="Divide"})
@@ -687,7 +702,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     slider("NR reference white (100-nit units)", "NrPaperWhiteScale", 0.01, 8)
                     text(string.format("Manual normalization ratio: %.3f", (draft.NrExposureMultiplier or 1) / math.max(draft.NrPaperWhiteScale or 1, 0.01)))
                     selection_help("For bridge modes: higher exposure brightens NR's input; higher reference white darkens it. Adjust exposure only and leave reference white fixed. Raising both equally cancels. Neither directly sets screen brightness.")
-                    selection_help("Reference white 1 = 100 nits. Ratio = manual exposure / reference white, before game exposure. Missing game exposure uses 1; automatic metering is not implemented. Legacy ignores the bridge exposure multiplier.")
+                    selection_help("Reference white 1 = 100 nits. Ratio = manual exposure / reference white, before game exposure. Missing game exposure uses 1 unless Lecram automatic input exposure is enabled. Legacy ignores the bridge exposure multiplier.")
                     imgui.tree_pop()
                 end
                 if imgui.tree_node("Model detail and tone - all passes") then
@@ -720,6 +735,19 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
             imgui.begin_disabled(status.renderer ~= 1 or status.settings.NrEnabled ~= true)
             if imgui.button("Capture NR pipeline (10 seconds)") then send("capture_nr_pipeline") end
             imgui.end_disabled()
+            if status.nr_path_test ~= nil then
+                text("Color-path A/B: one pass after upscaling, full NR resolution, neutral normalization.")
+                text("Same model/intensity; about 80 seconds. Keep the same scene; normal gaze is fine.")
+                text("Original settings restored automatically. Outputs: nr-path-tests.")
+                if status.nr_path_active then
+                    if imgui.button("Cancel color-path test") then send("nr_path_test_cancel") end
+                else
+                    imgui.begin_disabled(status.renderer ~= 1 or status.settings.NrEnabled ~= true)
+                    if imgui.button("Test Legacy vs normalized (auto capture)") then send("nr_path_test_begin") end
+                    imgui.end_disabled()
+                end
+                text(tostring(status.nr_path_test))
+            end
             text(tostring(status.nr_pipeline_capture))
             imgui.tree_pop()
         end

@@ -832,6 +832,21 @@ int main(int argc, char** argv) {
             require(field(snapshot(get), "NrProcessingOrder") == old_order && field(snapshot(get), "NrPreset") == old_preset && field(snapshot(get), "NrPass2Preset") == old_preset2, "Restore benchmark order and per-pass presets");
             require(!command(attachment, "1\n906\nnr_comparison_set\nNrEnabled=false"), "Reject unarmed comparison stage");
         }
+        if (!dx11) {
+            require(command(attachment,"1\n910\nset\nNrEnabled=true"),"Enable NR for path-test lifecycle");
+            const auto original=snapshot(get);
+            const auto old_pipeline=field(original,"NrColorPipeline");
+            const auto old_scale=field(original,"NrWorkingScale");
+            require(command(attachment,"1\n911\nnr_path_test_begin"),"Arm color-path comparison on DX12 host");
+            auto stage=snapshot(get);
+            require(contains(stage,"\"nr_path_active\":true") && field(stage,"NrColorPipeline")==0 && field(stage,"NrWorkingScale")==1,"Legacy stage uses controlled settings");
+            require(!command(attachment,"1\n912\nnr_path_test_begin"),"Reject overlapping path test");
+            require(!command(attachment,"1\n913\nnr_comparison_end"),"Other comparison cannot hijack path test");
+            require(!command(attachment,"1\n914\nset\nNrIntensity=0.1"),"Block user edits during test");
+            require(command(attachment,"1\n915\nnr_path_test_cancel"),"Cancel path test");
+            const auto restored=snapshot(get);
+            require(contains(restored,"\"nr_path_active\":false") && field(restored,"NrColorPipeline")==old_pipeline && field(restored,"NrWorkingScale")==old_scale,"Restore pipeline and working scale after cancel");
+        }
         text = snapshot(get);
         require(contains(text, "\"ready\":true") && contains(text, "\"processing\":true"), "Discovered graphics enables processing");
         if (!dx11) require(contains(text, "\"observer\":{\"ready\":true"), "Native D3D12 submission observer installed");
@@ -866,8 +881,16 @@ int main(int argc, char** argv) {
             puts("PASS: late NVIDIA OTA transport selects matching DX12 callbacks and executes SR/NR");
             return 0;
         }
+        if (uevr && !transport) {
+            detach(attachment);
+            require(start(&input), "Reconnect UEVR DX12 host");
+            tick(attachment, input.renderer, device, queue.Get());
+            require(contains(snapshot(get), "\"nr_path_active\":false"), "Cancelled path test stays inactive after reconnect");
+            detach(attachment);
+            puts("PASS: UEVR DX12 path-test lifecycle and reconnect");
+            return 0;
+        }
         if (uevr) {
-            require(transport, "UEVR runtime fixture exercises transport");
             tick(attachment, input.renderer, nullptr, nullptr);
             tick(attachment, input.renderer, device, nullptr);
             require(contains(snapshot(get), "\"D3D11D3D12Transport\":true"), "UEVR reset preserves transport");

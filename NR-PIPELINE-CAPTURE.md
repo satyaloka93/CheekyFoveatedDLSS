@@ -44,7 +44,7 @@ subsequent SR can change the result; restored pixels are not final SR output.
 Raw differences establish activity, not visual superiority or reference parity.
 
 Copies use tracked resource states and wait for recording retirement and GPU
-completion before mapping. Limits: 32 MiB per plane, 64 MiB per job, six jobs.
+completion before mapping. Limits: 32 MiB per plane, 96 MiB per job, six jobs.
 Unknown completion retains resources rather than freeing in-flight memory.
 An explicitly requested capture pins the code module for background writer
 lifetime; this diagnostic can therefore prevent unloading it until process exit.
@@ -61,3 +61,26 @@ UEVR menu behavior is tested with LuaJIT 2.1 and Lua 5.4 mocked hosts; a live
 UEVR headset capture with the new button has not been validated. No complete
 RenoDX parity, final-image quality improvement, or speedup is claimed. Exact
 filter equivalence, temporal guides and additional gamut paths remain open.
+
+## Automatic color-path comparison
+
+Standalone and UEVR expose **Test Legacy vs normalized (auto capture)** in
+the NR pipeline-capture section. Enable NR in gameplay first. The currently
+loaded DLL, model, intensity, SR settings and gaze mode remain unchanged.
+Both stages use one NR pass after upscaling, 100% working scale, residual
+reconstruction, bilinear reconstruction and neutral normalization/blending.
+Legacy is compared with the normalized linear-BT709 bridge using sRGB model
+signal. This tests the color-processing paths, not a model or FPS difference.
+
+Each stage has a 10-second countdown and a 30-second recording/retirement
+window. Stay in the same scene; normal gaze/movement is allowed, but images
+are not simultaneous or pixel-registered across stages. Settings restore after
+completion, cancellation or timeout; temporary settings are never saved as
+your normal profile. Cancel does not free GPU work still in flight.
+
+Files: `nr-path-tests/<pid>-<tick>/01-legacy/` and `02-normalized-srgb/`, each
+containing the usual per-view raw captures. Original and stage settings plus
+the runtime snapshot are saved for interpretation. Two completed view chains
+are required per stage; missing/oversized/in-flight captures report failure.
+This can briefly stall from GPU readback and full-resolution NR can cost more
+than your normal settings. It adds no capture work when inactive.

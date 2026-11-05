@@ -383,13 +383,26 @@ void draw_nr(Settings& s, bool previous_nr) {
             slider("Legacy correction blend", s.nr_color_strength, 0.0F, 2.0F);
             ImGui::TextWrapped("Legacy HDR needs separate transfer and blend controls. Bridge modes use one output blend.");
         }
+    if (ImGui::TreeNode("Lecram controls")) {
+        ImGui::TextWrapped("Experimental, Lecram-inspired controls. Shared by all passes. Requires a bridge color pipeline; Legacy leaves these inactive. D3D12 NR only.");
+        ImGui::Checkbox("Automatic input exposure", &s.nr_lecram_meter);
+        ImGui::TextWrapped("Meters the whole eye image each pass, independent of gaze. Replaces game exposure; manual exposure and reference white still trim the result. Adds one small GPU dispatch. Cropped-only inputs keep existing exposure.");
+        slider("Near-black lift protection", s.nr_lecram_black_guard, 0.F, 1.F);
+        ImGui::TextWrapped("Reduces NR's added haze near black. 0 = unchanged; 1 = strongest. It does not darken the original image.");
+        slider("Bright-edge darkening protection", s.nr_lecram_edge_guard, 0.F, 1.F);
+        ImGui::TextWrapped("Reduces NR darkening on the bright side of sharp edges. May also weaken intentional contact shadows. 0 = unchanged; 1 = strongest.");
+        slider("Temporal detail stability", s.nr_lecram_stability, 0.F, 1.F);
+        ImGui::TextWrapped("0 = off. Smooths NR detail using motion and the previous eye/pass result; NR still runs every frame. Start at 0.3. Higher values can soften moving detail. Adds GPU work and bounded history memory; invalid history uses fresh NR.");
+        if (ImGui::Button("Reset Lecram controls")) {s.nr_lecram_meter=false;s.nr_lecram_black_guard=0.F;s.nr_lecram_edge_guard=0.F;s.nr_lecram_stability=0.F;}
+        ImGui::TreePop();
+    }
     if (ImGui::TreeNode("Input normalization - all passes")) {
         combo("NR exposure texture", s.nr_exposure_mode, "Off\0Multiply\0Divide\0");
         slider("Model-input exposure multiplier (all passes)", s.nr_exposure_multiplier, .01F, 10.F);
         slider("NR reference white (100-nit units)", s.nr_paper_white_scale, .01F, 8.0F);
         ImGui::Text("Manual normalization ratio: %.3f", s.nr_exposure_multiplier / s.nr_paper_white_scale);
         ImGui::TextWrapped("For bridge modes: higher exposure brightens NR's input; higher reference white darkens it. Adjust exposure only and leave reference white fixed. Raising both equally cancels. Neither directly sets screen brightness.");
-        ImGui::TextWrapped("Reference white 1 = 100 nits. Ratio = manual exposure / reference white, before game exposure. Missing game exposure uses 1; automatic metering is not implemented. Legacy ignores the bridge exposure multiplier.");
+        ImGui::TextWrapped("Reference white 1 = 100 nits. Ratio = manual exposure / reference white, before game exposure. Missing game exposure uses 1 unless Lecram automatic input exposure is enabled. Legacy ignores the bridge exposure multiplier.");
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("Model detail and tone - all passes")) {
@@ -936,6 +949,11 @@ void draw_overlay_ui(OverlayUiState& r,const OverlayRuntime& runtime,InputState&
         if (ImGui::CollapsingHeader("NR same-frame pipeline capture")) {
             ImGui::TextWrapped("One-shot D3D12 diagnostic: original, model input/output and restored pixels for each pass of two view chains. Starts in 10 seconds; close menus. Does not change tuning. Raw files are for analysis, not screenshots.");
             if (ImGui::Button("Capture NR pipeline (10 seconds)")) command(r, runtime, "capture_nr_pipeline");
+            ImGui::TextWrapped("Color-path A/B: one pass after upscaling at full NR resolution; neutral normalization, sRGB signal, same model/intensity. About 80 seconds. Original settings restored. Keep the same scene; normal gaze is fine. Temporary readback can stall.");
+            if (member(r.snapshot,"nr_path_active")=="true") {
+                if(ImGui::Button("Cancel color-path test")) command(r,runtime,"nr_path_test_cancel");
+            } else if(ImGui::Button("Test Legacy vs normalized (auto capture)")) command(r,runtime,"nr_path_test_begin");
+            ImGui::TextWrapped("%s",plain(member(r.snapshot,"nr_path_test")).c_str());
             const auto capture_status=plain(member(r.snapshot,"nr_pipeline_capture"));
             ImGui::TextWrapped("%s",capture_status.c_str());
         }

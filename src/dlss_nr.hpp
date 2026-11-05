@@ -91,6 +91,8 @@ struct DlssNrSnapshot {
     NrProcessingOrder processing_order{NrProcessingOrder::after_upscaling};
     std::uint32_t processing_width{}, processing_height{};
     bool hdr_input{};
+    const char* temporal_reason{"Off"};
+    std::uint64_t temporal_filtered{},temporal_fresh{},temporal_fallbacks{},temporal_bytes{};
     const char* exposure_source{"Not evaluated yet"};
     float exposure_multiplier{1.0F};
     std::uint64_t exposure_view{};

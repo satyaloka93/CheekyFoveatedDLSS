@@ -78,6 +78,10 @@ std::atomic<std::uint32_t> nr_signal_encoding{0};
 std::atomic<std::uint32_t> nr_scaling_domain{2};
 std::atomic<std::uint32_t> nr_exposure_mode{0};
 std::atomic<float> nr_exposure_multiplier{1.0F};
+std::atomic<float> nr_lecram_edge_guard{0.0F};
+std::atomic<float> nr_lecram_stability{0.0F};
+std::atomic<float> nr_lecram_black_guard{0.0F};
+std::atomic<bool> nr_lecram_meter{false};
 std::atomic<std::uint32_t> nr_intensity_bits{0x3F800000U};
 std::atomic<std::uint32_t> nr_local_tone_bits{0x3F800000U};
 std::atomic<std::uint32_t> nr_local_structure_bits{0x3F800000U};
@@ -290,6 +294,10 @@ Settings configured_settings() noexcept {
     settings.nr_scaling_domain = nr_scaling_domain.load(std::memory_order_acquire);
     settings.nr_exposure_mode = nr_exposure_mode.load(std::memory_order_acquire);
     settings.nr_exposure_multiplier = nr_exposure_multiplier.load(std::memory_order_acquire);
+    settings.nr_lecram_stability = nr_lecram_stability.load(std::memory_order_acquire);
+    settings.nr_lecram_edge_guard = nr_lecram_edge_guard.load(std::memory_order_acquire);
+    settings.nr_lecram_black_guard = nr_lecram_black_guard.load(std::memory_order_acquire);
+    settings.nr_lecram_meter = nr_lecram_meter.load(std::memory_order_acquire);
     settings.nr_intensity = load_float(nr_intensity_bits);
     settings.nr_local_tone_strength = load_float(nr_local_tone_bits);
     settings.nr_local_structure_strength = load_float(nr_local_structure_bits);
@@ -493,6 +501,10 @@ void update_settings(const Settings& settings) noexcept {
     nr_signal_encoding.store(settings.nr_signal_encoding <= 2U ? settings.nr_signal_encoding : 0U, std::memory_order_release);
     nr_scaling_domain.store(settings.nr_scaling_domain <= 2U ? settings.nr_scaling_domain : 2U, std::memory_order_release);
     nr_exposure_mode.store(settings.nr_exposure_mode <= 2U ? settings.nr_exposure_mode : 0U, std::memory_order_release);
+    nr_lecram_stability.store(std::isfinite(settings.nr_lecram_stability) ? std::clamp(settings.nr_lecram_stability,0.F,1.F) : 0.F,std::memory_order_release);
+    nr_lecram_edge_guard.store(std::isfinite(settings.nr_lecram_edge_guard) ? std::clamp(settings.nr_lecram_edge_guard, 0.0F, 1.0F) : 0.0F, std::memory_order_release);
+    nr_lecram_black_guard.store(std::isfinite(settings.nr_lecram_black_guard) ? std::clamp(settings.nr_lecram_black_guard, 0.0F, 1.0F) : 0.0F, std::memory_order_release);
+    nr_lecram_meter.store(settings.nr_lecram_meter, std::memory_order_release);
     nr_exposure_multiplier.store(std::isfinite(settings.nr_exposure_multiplier) ? std::clamp(settings.nr_exposure_multiplier, 0.01F, 10.0F) : 1.0F, std::memory_order_release);
     // NR 310.8 saturates the final model blend at one. Accept legacy saved
     // values above one, but expose the effective value to both integrations.

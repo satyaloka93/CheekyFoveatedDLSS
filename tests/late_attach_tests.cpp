@@ -313,7 +313,7 @@ void observe_afw_lower(const NgxParameters* params) {
     if (output == fixture().textures12[3].Get()) afw_full_resets += get_ui(params, "Reset") != 0;
 }
 std::string snapshot(CheekyUEVRSnapshotFn get) { std::vector<char> text(32768); require(get(text.data(),32768),"Late snapshot"); return text.data(); }
-void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
+void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook, CheekyUEVRSnapshotFn get) {
     auto& f = fixture();
     if (f.context) return;
     f.params.Set("Jitter.Offset.X", 0.F); f.params.Set("Jitter.Offset.Y", 0.F);
@@ -725,7 +725,11 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         for(unsigned y=0;y<desc.Height;++y) for(unsigned x=0;x<desc.Width;++x) {
             auto* row=static_cast<std::byte*>(data)+fp.Offset+y*fp.Footprint.RowPitch;
             if(desc.Format==DXGI_FORMAT_R32_FLOAT) reinterpret_cast<float*>(row)[x]=value[0];
-            else for(unsigned c=0;c<4;++c) reinterpret_cast<DirectX::PackedVector::HALF*>(row)[4*x+c]=DirectX::PackedVector::XMConvertFloatToHalf(value[c]);
+            else {
+                const unsigned channels=desc.Format==DXGI_FORMAT_R16G16_FLOAT?2U:4U;
+                require(desc.Format==DXGI_FORMAT_R16G16_FLOAT || desc.Format==DXGI_FORMAT_R16G16B16A16_FLOAT,"Unsupported fixture upload format");
+                for(unsigned c=0;c<channels;++c) reinterpret_cast<DirectX::PackedVector::HALF*>(row)[channels*x+c]=DirectX::PackedVector::XMConvertFloatToHalf(value[c]);
+            }
         }
         upload->Unmap(0,nullptr);
         D3D12_TEXTURE_COPY_LOCATION src{},dst{};
@@ -811,6 +815,120 @@ void verify_nr_reset_isolation(void (*command)(const char*), bool lower_hook) {
         readback->Unmap(0,nullptr);
     }
     }
+    // Lecram controls: actual GPU input and output, not only setting round trips.
+    command("1\n96\nset\nNrColorPipeline=1\nNrSignalEncoding=2\nNrScalingDomain=2\nNrExposureMode=0\nNrExposureMultiplier=1\nNrPaperWhiteScale=1\nNrWorkingScale=1\nNrReconstruction=0\nNrHdrTransferStrength=1\nNrColorStrength=1\nNrLecramBlackGuard=0\nNrLecramEdgeGuard=0");
+    auto read_lecram = [&]() {
+        auto rb=make_buffer(1024,D3D12_HEAP_TYPE_READBACK);
+        D3D12_TEXTURE_COPY_LOCATION to{},from{};
+        to.pResource=rb.Get();to.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        to.PlacedFootprint.Footprint={DXGI_FORMAT_R16G16B16A16_FLOAT,1,1,1,256};
+        const D3D12_BOX pixel{0,0,0,1,1,1};
+        unsigned n=0;
+        for(auto* texture:{nr_color_resource,sr_inputs[0].color}) {
+            from.pResource=texture;from.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+            to.PlacedFootprint.Offset=512*n++;
+            transition_resource(texture,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_SOURCE);
+            f.list->CopyTextureRegion(&to,0,0,0,&from,&pixel);
+            transition_resource(texture,D3D12_RESOURCE_STATE_COPY_SOURCE,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        }
+        f.finish_gpu();void* mapped{};check(rb->Map(0,nullptr,&mapped),"Map Lecram GPU oracle");
+        std::array<float,8> values{};
+        for(unsigned i=0;i<8;++i) values[i]=DirectX::PackedVector::XMConvertHalfToFloat(
+            reinterpret_cast<DirectX::PackedVector::HALF*>(static_cast<std::byte*>(mapped)+512*(i/4))[i%4]);
+        rb->Unmap(0,nullptr);return values;
+    };
+    for(float source:{0.25F,4.F,0.F}) for(bool meter:{false,true}) {
+        upload_solid(f.textures12[0].Get(),{source,source,source,0.25F});
+        command(meter?"1\n96\nset\nNrLecramMeter=true":"1\n96\nset\nNrLecramMeter=false");
+        evaluate(0);const auto values=read_lecram();
+        const float gain=meter && source>0 ? std::clamp(.18F/source,.0625F,16.F):1.F;
+        const float normalized=source*gain;
+        const float expected=normalized/std::sqrt(1.F+normalized*normalized);
+        require(std::abs(values[0]-expected)<.001F,"Lecram meter not applied to GPU model input");
+        require(values[7]==.25F,"Lecram meter changed source alpha");
+    }
+    command("1\n96\nset\nNrLecramMeter=false\nNrLecramBlackGuard=0");
+    upload_solid(f.textures12[0].Get(),{0.F,0.F,0.F,0.25F});evaluate(0);
+    const auto lifted=read_lecram();require(lifted[4]>.1F,"Black-guard fixture must have a real NR lift");
+    command("1\n96\nset\nNrLecramBlackGuard=1");evaluate(0);
+    const auto guarded=read_lecram();require(guarded[4]==0.F && guarded[5]==0.F && guarded[6]==0.F && guarded[7]==.25F,
+        "Lecram near-black protection failed to preserve black/alpha");
+    command("1\n96\nset\nNrLecramBlackGuard=0");evaluate(0);
+    const auto restored=read_lecram();require(std::abs(restored[4]-lifted[4])<.001F,"Lecram reset failed to restore baseline");
+    // One bright pixel beside black: guard must act on NR darkening, not
+    // brighten the input or affect a flat surface with no edge.
+    upload_solid(f.textures12[0].Get(),{0.F,0.F,0.F,0.25F});
+    auto edge_upload=make_buffer(256,D3D12_HEAP_TYPE_UPLOAD);
+    void* edge_data{};check(edge_upload->Map(0,nullptr,&edge_data),"Map edge fixture");
+    auto* edge_half=static_cast<DirectX::PackedVector::HALF*>(edge_data);
+    for(unsigned c=0;c<4;++c) edge_half[c]=DirectX::PackedVector::XMConvertFloatToHalf(c==3?.25F:1.F);
+    edge_upload->Unmap(0,nullptr);
+    D3D12_TEXTURE_COPY_LOCATION edge_src{},edge_dst{};
+    edge_src.pResource=edge_upload.Get();edge_src.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+    edge_src.PlacedFootprint.Footprint={DXGI_FORMAT_R16G16B16A16_FLOAT,1,1,1,256};
+    edge_dst.pResource=f.textures12[0].Get();edge_dst.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+    transition_resource(edge_dst.pResource,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+    f.list->CopyTextureRegion(&edge_dst,0,0,0,&edge_src,nullptr);
+    transition_resource(edge_dst.pResource,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    evaluate(0);const auto dark_edge=read_lecram();
+    require(dark_edge[4]<.9F,"Edge fixture must include real NR darkening");
+    command("1\n96\nset\nNrLecramEdgeGuard=1");evaluate(0);const auto clean_edge=read_lecram();
+    require(std::abs(clean_edge[4]-1.F)<.002F && clean_edge[7]==.25F,"Bright-edge guard failed");
+    command("1\n96\nset\nNrLecramEdgeGuard=0");evaluate(0);const auto edge_reset=read_lecram();
+    require(std::abs(edge_reset[4]-dark_edge[4])<.002F,"Edge guard reset failed");
+    // Temporal oracle: same model evaluation every frame, smoothing only its correction.
+    command("1\n96\nset\nNrLecramStability=0.5\nNrLecramBlackGuard=0\nNrLecramEdgeGuard=0\nNrLecramMeter=false\nNrDepthConvention=1");
+    upload_solid(f.textures12[0].Get(),{.25F,.25F,.25F,.25F});
+    upload_solid(f.textures12[1].Get(),{.5F,0,0,0});
+    upload_solid(f.textures12[2].Get(),{0,0,0,0});
+    upload_solid(model_color.Get(),{.3F,.3F,.3F,0});
+    evaluate(1); // Warm first-use driver compilation before the consecutive-frame oracle.
+    evaluate(1);
+    const auto set_model_pixel=[&](float value) {
+        auto up=make_buffer(256,D3D12_HEAP_TYPE_UPLOAD);void* data{};
+        check(up->Map(0,nullptr,&data),"Map temporal model pixel");
+        for(unsigned c=0;c<4;++c) static_cast<DirectX::PackedVector::HALF*>(data)[c]=DirectX::PackedVector::XMConvertFloatToHalf(c==3?0.F:value);
+        up->Unmap(0,nullptr);
+        D3D12_TEXTURE_COPY_LOCATION a{},b{};a.pResource=up.Get();a.Type=D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        a.PlacedFootprint.Footprint={DXGI_FORMAT_R16G16B16A16_FLOAT,1,1,1,256};
+        b.pResource=model_color.Get();b.Type=D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        transition_resource(b.pResource,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,D3D12_RESOURCE_STATE_COPY_DEST);
+        f.list->CopyTextureRegion(&b,0,0,0,&a,nullptr);
+        transition_resource(b.pResource,D3D12_RESOURCE_STATE_COPY_DEST,D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        color_test_uploads.push_back(up);
+    };
+    set_model_pixel(.7F);evaluate(0);
+    require(evaluation_order=="NS","Temporal stabilization skipped NR evaluation");
+    const auto smooth=read_lecram();
+    const float uncompress=std::sqrt(1.F+.25F*.25F);
+    printf("Temporal actual=%g expected=%g proxy=%g reset=%u\n%s\n",smooth[4],(.7F*.6F+.3F*.4F)*uncompress,smooth[0],nr_reset,snapshot(get).c_str());
+    require(std::abs(smooth[4]-(.7F*.6F+.3F*.4F)*uncompress)<.004F,"Temporal correction was not blended on GPU");
+    require(smooth[7]==.25F,"Temporal correction replaced source alpha");
+    // A different eye/viewport starts fresh even while the first eye has history.
+    auto* temporal_first_handle=f.handle;const auto temporal_first_viewport=f.viewport.value;
+    if(f.use_sl && !lower_hook){++f.viewport.value;require(f.sl_options(&f.viewport,&f.options)==0,"Temporal second eye options");}
+    else {require(ngx_succeeded(f.create12(f.list.Get(),1,&f.params,&f.handle)),"Temporal second eye feature");
+        if(f.use_sl)proc<void(*)(Evaluate12,const NgxHandle*,NgxParameters*)>(f.sl,"CheekyFakeConfigure")(f.evaluate12,f.handle,&f.params);}
+    evaluate(0);const auto second_eye=read_lecram();
+    require(std::abs(second_eye[4]-.7F*uncompress)<.004F,"Temporal history leaked between eyes");
+    if(!f.use_sl || lower_hook)require(ngx_succeeded(f.release(f.handle)),"Temporal second eye release");
+    f.handle=temporal_first_handle;f.viewport.value=temporal_first_viewport;
+    if(f.use_sl && lower_hook)proc<void(*)(Evaluate12,const NgxHandle*,NgxParameters*)>(f.sl,"CheekyFakeConfigure")(f.evaluate12,f.handle,&f.params);
+    if(f.use_sl && !lower_hook)require(f.sl_options(&f.viewport,&f.options)==0,"Restore temporal eye");
+    // Depth disocclusion and invalid/offscreen motion use the CURRENT NR output.
+    upload_solid(f.textures12[1].Get(),{.9F,0,0,0});evaluate(0);
+    const auto disoccluded=read_lecram();
+    require(std::abs(disoccluded[4]-.7F*uncompress)<.004F,"Disocclusion did not restore fresh NR");
+    upload_solid(f.textures12[2].Get(),{1000.F,1000.F,0,0});evaluate(0);
+    const auto outside=read_lecram();require(std::abs(outside[4]-.7F*uncompress)<.004F,"Invalid history used stale correction");
+    upload_solid(f.textures12[2].Get(),{std::numeric_limits<float>::quiet_NaN(),0,0,0});evaluate(0);
+    const auto nan_motion=read_lecram();require(std::abs(nan_motion[4]-.7F*uncompress)<.004F,"NaN motion poisoned temporal output");
+    upload_solid(f.textures12[2].Get(),{0,0,0,0});
+    evaluate(1);const auto cut=read_lecram();require(std::abs(cut[4]-.7F*uncompress)<.004F,"Explicit reset retained stale temporal history");
+    command("1\n96\nset\nNrLecramStability=0\nNrDepthConvention=0");evaluate(0);
+    const auto off=read_lecram();require(std::abs(off[4]-.7F*uncompress)<.004F,"Temporal off changed fresh NR output");
+    puts("PASS Lecram temporal GPU blending, every-frame NR, disocclusion, invalid motion, reset, off and alpha");
+    puts("PASS Lecram GPU meter, black/bright-edge guards, reset and alpha");
     override_nr(nullptr);f.nr_test_exposure=nullptr;f.nr_test_exposure_override=false;f.params.Set("ExposureTexture",static_cast<ID3D12Resource*>(nullptr));
     command("1\n96\nset\nNrColorPipeline=0\nNrSignalEncoding=0\nNrScalingDomain=2\nNrExposureMode=0\nNrExposureMultiplier=1\nNrPaperWhiteScale=1\nNrReconstruction=0");
     copy_nr_color(false);
@@ -1708,7 +1826,7 @@ void verify_late_attach_test(CheekyUEVRSnapshotFn get, void (*command)(const cha
     require(ngx_succeeded(f.evaluate()),"Evaluate recreated game feature"); f.finish_gpu();
     verify_d3d11_reused_output_extent(command);
     verify_d3d11_native_extent(command, true);
-    verify_nr_reset_isolation(command, snapshot(get).find("\"d3d12_lower_hook_active\":true") != std::string::npos);
+    verify_nr_reset_isolation(command, snapshot(get).find("\"d3d12_lower_hook_active\":true") != std::string::npos, get);
     if (!f.context && !f.use_sl) {
         command("1\n70\nset\nEnabled=false");
         // UE can discard a recording after evaluation. Exhaust more than the

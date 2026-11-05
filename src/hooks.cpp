@@ -5324,7 +5324,10 @@ NgxResult process_d3d12_evaluation(const D3D12NgxEvaluationCall& call,
         camera_scope.emplace(static_cast<DlssViewId>(reinterpret_cast<std::uintptr_t>(call.handle)),
             native_gaze_projection.projection, native_gaze_projection.viewport);
     }
-    if (current_settings().center_mode == FoveationCenterMode::openxr_gaze_right_eye &&
+    // Fixed automatic alignment and ordinary gaze need the same per-eye camera
+    // as shared gaze. The Streamline constants still describe symmetric MAIN;
+    // using them here centers both NR regions at 0.5 in asymmetric SBS.
+    if (uses_coordinated_center(current_settings()) &&
         recognizable_d3d12_dlss_evaluation(call)) {
         unsigned eye{};
         const auto projection=cyberpunk_sbs_native_camera(call.parameters,eye);

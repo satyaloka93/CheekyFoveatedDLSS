@@ -129,6 +129,10 @@ struct Settings {
     std::uint32_t nr_scaling_domain{2};
     std::uint32_t nr_exposure_mode{0};
     float nr_exposure_multiplier{1.0F};
+    float nr_lecram_edge_guard{0.0F};
+    float nr_lecram_stability{0.0F};
+    float nr_lecram_black_guard{0.0F};
+    bool nr_lecram_meter{false};
     float nr_intensity{1.0F};
     float nr_local_tone_strength{1.0F};
     float nr_local_structure_strength{1.0F};

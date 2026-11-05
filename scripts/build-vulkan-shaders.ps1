@@ -43,7 +43,7 @@ foreach ($job in $jobs) {
     $match = [regex]::Match($header, $pattern)
     if (-not $match.Success) { throw "Cannot extract $($job.Header)" }
     $source = Join-Path $out "$($job.Name).hlsl"
-    $shader = $match.Groups[1].Value
+    $shader = $match.Groups[1].Value.Replace(')" R"(', '')
     if ($job.Header -eq 'src\nr_codec_shader.hpp') {
         $shader="#define CHEEKY_NR_NO_EXPOSURE 1`n"+$shader
     }

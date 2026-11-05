@@ -94,6 +94,32 @@ struct Gpu {
 int run_nr_lifetime_tests() {
     try {
         Gpu gpu;
+        {
+            auto order=nr_history_order(gpu.device.Get());require(order!=nullptr,"Temporal timeline creation failed");
+            auto producer=nr_history_attach(gpu.list.Get(),order);
+            require(producer && !nr_history_ready(producer,order),"Unsubmitted history was accepted");
+            check(gpu.queue->Wait(gpu.gate.Get(),100));
+            nr_history_before_execute(gpu.queue.Get(),gpu.list.Get());gpu.execute();
+            require(nr_history_ready(producer,order),"Submitted in-flight history must be eligible without CPU waiting");
+            auto producer_allocator=gpu.allocator;
+            gpu.reset();
+            auto consumer=nr_history_attach(gpu.list.Get(),order);
+            ComPtr<ID3D12CommandQueue> q;D3D12_COMMAND_QUEUE_DESC qd{};check(gpu.device->CreateCommandQueue(&qd,IID_PPV_ARGS(&q)));
+            nr_history_before_execute(q.Get(),gpu.list.Get());gpu.execute(q.Get());
+            ComPtr<ID3D12Fence> done;check(gpu.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&done)));check(q->Signal(done.Get(),1));
+            Sleep(10);require(done->GetCompletedValue()==0,"Cross-queue history read overtook blocked producer");
+            check(gpu.gate->Signal(100));check(done->SetEventOnCompletion(1,gpu.event));require(WaitForSingleObject(gpu.event,10000)==WAIT_OBJECT_0,"Temporal queue wait did not resolve");
+            nr_history_before_execute(q.Get(),gpu.list.Get());gpu.execute(q.Get());
+            require(!nr_history_ready(consumer,order),"Replayed producer must not be selected as consecutive history");
+            check(q->Signal(done.Get(),2));check(done->SetEventOnCompletion(2,gpu.event));require(WaitForSingleObject(gpu.event,10000)==WAIT_OBJECT_0,"Replay did not complete");
+            gpu.reset();auto discarded=nr_history_attach(gpu.list.Get(),order);gpu.reset();
+            require(!nr_history_ready(discarded,order),"Discarded recording became reusable history");
+            gpu.wait();
+            // Restore a fresh, unsignaled gate for the original lifetime fixtures.
+            check(gpu.device->CreateFence(0,D3D12_FENCE_FLAG_NONE,IID_PPV_ARGS(&gpu.gate)));
+            puts("PASS temporal producer readiness, GPU cross-queue order, replay and discard");
+        }
+
         // Two stable view owners, with no cache eviction or retirement required
         // to reclaim completed fences. This is the production bookkeeping,
         // independent of the NVIDIA evaluator stub used by input-copy tests.

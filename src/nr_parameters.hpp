@@ -47,9 +47,11 @@ inline NgxResult neural_scaling_ratio_callback(NgxParameters* const parameters) 
     append(settings.nr_signal_encoding);
     append(settings.nr_scaling_domain);
     append(settings.nr_exposure_mode);
+    append(settings.nr_lecram_meter ? 1U : 0U);
     for (const auto value : {
             settings.nr_working_scale,
             settings.nr_exposure_multiplier,
+            settings.nr_lecram_black_guard, settings.nr_lecram_edge_guard, settings.nr_lecram_stability,
             settings.nr_intensity,
             settings.nr_local_tone_strength,
             settings.nr_local_structure_strength,
