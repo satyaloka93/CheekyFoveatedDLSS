@@ -605,7 +605,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
         if status.renderer ~= 0 or draft.D3D11D3D12Transport then
             check("Enable DLSS-NR", "NrEnabled")
             text("Alt+Shift+> (period key): toggle DLSS-NR")
-            if draft.NrEnabled then
+            do -- Match standalone: allow configuring NR before enabling it.
                 check("Foveated NR", "NrFoveated")
                 if draft.NrFoveated then
                     if status.settings.NrSecondPass ~= nil then
@@ -665,7 +665,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     combo("NR color pipeline", "NrColorPipeline", {[0]="Legacy",[1]="Linear BT.709 bridge",[2]="sRGB bridge"})
                     combo("NR signal encoding", "NrSignalEncoding", {[0]="sRGB",[1]="PQ SDR",[2]="Linear SDR"})
                     combo("NR scaling domain", "NrScalingDomain", {[0]="sRGB",[1]="PQ",[2]="Linear"})
-                    text("Bridge modes: native DLSS linear BT.709 or explicit sRGB; texture exposure is DX12 only.")
+                    selection_help("For Lecram controls, select Linear BT.709 bridge here (or sRGB bridge for sRGB input). Legacy leaves Lecram inactive. Bridge modes also expose NR output blend below.")
                 end
                 text("Effect strength - all passes")
                 slider("NR intensity", "NrIntensity", 0, 1)
@@ -677,7 +677,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     else
                         slider("Legacy HDR transfer strength", "NrHdrTransferStrength", 0, 2)
                         slider("Legacy correction blend", "NrColorStrength", 0, 2)
-                        text("Legacy HDR uses separate tone-map transfer math. Bridge modes show one NR output blend.")
+                        selection_help("Legacy HDR uses separate transfer and blend controls. Select Linear BT.709 bridge in NR color pipeline above to show the percentage NR output blend and enable Lecram controls.")
                     end
                 if imgui.tree_node("Lecram controls") then
                     selection_help("Experimental, Lecram-inspired controls. Shared by all passes. Requires a bridge color pipeline; Legacy leaves these inactive. D3D12 NR only.")
@@ -686,12 +686,12 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     slider("Near-black lift protection", "NrLecramBlackGuard", 0, 1)
                     selection_help("Reduces NR haze near black. 0 = unchanged; 1 = strongest. Does not darken the original image.")
                     slider("Bright-edge darkening protection", "NrLecramEdgeGuard", 0, 1)
+                    selection_help("Reduces NR darkening on the bright side of sharp edges. May weaken intentional contact shadows. 0 = unchanged; 1 = strongest.")
                     slider("Temporal detail stability", "NrLecramStability", 0, 1)
                     selection_help("0 = off. Smooths NR detail with motion and the previous eye/pass result; NR still runs every frame. Start at 0.3. Higher values can soften moving detail. Adds GPU work and bounded history memory. Invalid history uses fresh NR.")
                     if imgui.button("Reset Lecram controls") then
                         for key, value in pairs({NrLecramMeter=false,NrLecramBlackGuard=0,NrLecramEdgeGuard=0,NrLecramStability=0}) do draft[key],dirty[key],ready_edits[key]=value,value,value end
                     end
-                    selection_help("Reduces NR darkening on the bright side of sharp edges. May weaken intentional contact shadows. 0 = unchanged; 1 = strongest.")
                     imgui.tree_pop()
                 end
                 if imgui.tree_node("Input normalization - all passes") then
@@ -709,6 +709,7 @@ uevr.lua.add_script_panel("Cheeky Foveated DLSS", function()
                     slider("Model local tone strength", "NrLocalToneStrength", 0, 2)
                     slider("Model structure strength", "NrLocalStructureStrength", 0, 2)
                     selection_help("Changes how NR treats tone and detail. Results vary by model and scene; these are not ordinary brightness/contrast controls.")
+                    check("UI correction", "NrUiCorrection")
                     check("Automatic mask", "NrAutomaticMask")
                     if draft.NrAutomaticMask == true or (draft.NrSecondPass and draft.NrPass2AutomaticMask) or (draft.NrThirdPass and draft.NrPass3AutomaticMask) then
                         slider("Skin structure", "NrSkinStructureStrength", 0, 2)

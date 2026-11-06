@@ -1,0 +1,40 @@
+Cheeky NR bridge preview 8 - UEVR upgrade (2026-11-06)
+
+Close the game. Back up its UEVR profile, then merge the plugins and scripts
+folders into:
+  %APPDATA%\UnrealVRMod\<game-executable-profile>\
+Use the actual executable's profile, not the game installation directory.
+
+Resulting files:
+  plugins\CheekyFoveatedDLSS.dll
+  plugins\CheekyFoveatedDLSS\CheekyFoveatedDLSSRuntime.dll
+  scripts\cheeky_foveated_dlss.lua
+Replace all three together. Existing INIs and NVIDIA DLLs are not included and
+must be preserved. Do not install standalone dxgi.dll/version.dll for this route,
+or load a second Cheeky ReShade addon/standalone host into the same game.
+
+Profiles updated and user reported the menu working:
+  TheOuterWorlds2-Win64-Shipping
+  Avowed-Win64-Shipping
+  SHProto-Win64-Shipping  (Silent Hill 2)
+  SHf-Win64-Shipping     (Silent Hill f)
+This feedback is not a separate exhaustive gameplay test of each title.
+
+UEVR menu: LuaLoader > Script UI > Cheeky Foveated DLSS > DLSS-NR.
+Controls remain visible with NR off. Enable DLSS-NR to evaluate it.
+NR color pipeline: select Linear BT.709 bridge to use Lecram controls.
+NR intensity changes what the model generates; NR output blend controls how
+much of its result appears. Percentage blend appears only in bridge modes.
+UI correction is under Model detail and tone - all passes.
+Additional passes use shared strength controls and independent model choices.
+
+Lecram options are experimental, default off/zero. Temporal stability adds GPU
+work/history; try 0 versus 0.3. Keep your existing NVIDIA runtime DLL placement.
+Current/previous NR DLL switching requires restarting the game. This ZIP does
+not supply NVIDIA DLLs or register OpenXR layers. Do not use the Cyberpunk
+standalone installer for UEVR.
+
+Avoid extremely low NR working scales: 12% caused GPU hangs in Cyberpunk.
+A universally safe minimum has not been established. See LECRAM-CONTROLS.md
+and release notes for limitations. To roll back, close the game and restore
+the three matching files from your profile backup.

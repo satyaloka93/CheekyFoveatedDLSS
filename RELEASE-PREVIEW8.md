@@ -53,8 +53,26 @@ quality, performance or long-session headset stability.
 - User found high Tone strength suppressed the desired structural effect;
   Tone=0 is a useful comparison baseline, not a universal quality preset.
 - Current/previous NR DLL switching still requires restarting the game.
-- UEVR source/menu support is included, but this asset is **Cyberpunk standalone
-  only**. No new UEVR game deployment or headset validation is claimed here.
+- Added the separate UEVR upgrade on 2026-11-06 after user confirmation that
+  the updated menu works. This is not exhaustive gameplay validation of each title.
 
 Archive SHA256:
 `81e6baab5dbf268b3626b259362cc0c8ff7db4da981272e2826e09cd91576674`
+
+## UEVR upgrade added 2026-11-06
+
+Download **Cheeky-UEVR-Preview8-20261106.zip** for UEVR games. Close the game,
+back up its profile, then merge `plugins` and `scripts` into
+`%APPDATA%/UnrealVRMod/<game-executable-profile>/`. Replace the plugin, runtime
+and Lua script together; preserve INIs and NVIDIA DLLs. No root DXGI/version
+loader or OpenXR registration is needed. Full instructions are inside the ZIP.
+
+The updated Lua menu exposes NR settings while NR is off, adds pass-1 UI
+correction, and explains bridge/Lecram dependencies. All 69 standalone NR
+setting fields have Lua counterparts; host-specific diagnostics are not claimed
+to have complete parity. LuaJIT 2.1 and Lua 5.4 regression tests passed.
+
+Select **NR color pipeline → Linear BT.709 bridge** for Lecram controls and
+the percentage **NR output blend** beneath intensity.
+
+UEVR archive SHA256: `5acaadd717c59f1119678fa6bc709a42702aa85f0a4166c4a0bf2026797a819d`

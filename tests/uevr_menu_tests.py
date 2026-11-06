@@ -7,12 +7,24 @@ This validates Lua behavior, not UEVR's renderer, input routing, or headset UI.
 import copy
 import importlib
 import json
+import re
 from pathlib import Path
 import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "build/test-python"))
+# Catch newly added standalone NR fields missing from the Lua menu.
+standalone = (ROOT / "standalone/overlay_ui.cpp").read_text()
+standalone = standalone[standalone.index("void draw_extra_nr_pass("):standalone.index("void diagnostic_line(")]
+menu_source = (ROOT / "uevr/scripts/cheeky_foveated_dlss.lua").read_text()
+schema = dict((field, key) for key, field in re.findall(
+    r'CHEEKY_SETTING\("([^"]+)", (\w+)\)', (ROOT / "uevr/settings_fields.inc").read_text()))
+for field in set(re.findall(r's\.(nr_\w+)', standalone)):
+    key = schema[field]
+    extra = re.match(r"NrPass[23](.*)", key)
+    assert '"' + key + '"' in menu_source or (extra and '"' + extra[1] + '"' in menu_source), key
+
 reports = list((ROOT / "bin/Release/uevr-test-data").glob("*/CheekyFoveatedDLSS-diagnostics.json"))
 if not reports:
     raise SystemExit("Run CheekyUEVRTests.exe first to produce a real runtime snapshot.")
@@ -481,7 +493,9 @@ def run(engine):
     receive(state)
     draw()
     assert g.trees["DLSS-SR"] and g.trees["Performance"]
-    assert g["values"]["Fovea width"] is None and g["values"]["NR intensity"] is None
+    assert g["values"]["Fovea width"] is None
+    assert g["values"]["NR intensity"] is not None, "NR controls must remain visible while NR is off, matching standalone"
+    assert g.combos["NR color pipeline"][1] == "Linear BT.709 bridge"
     state["settings"].update(Enabled=True, NrEnabled=True, NrFoveated=False, NrAutomaticMask=False)
     receive(state)
     draw()
@@ -514,7 +528,7 @@ def run(engine):
     state["settings"]["NrPreset"] = 2
     receive(state)
     draw()
-    assert g["values"]["UI correction"] is None
+    assert g["values"]["UI correction"] == state["settings"]["NrUiCorrection"]
     state["nr_details"]["hdr_input"] = False
     receive(state)
     draw()
@@ -523,6 +537,12 @@ def run(engine):
     receive(state)
     draw()
     assert g["values"]["NR reference white (100-nit units)"] is not None, "HDR must expose reference white"
+    # Pass-1 UI correction must use the same runtime field as standalone.
+    draw(changes={"UI correction": True})
+    assert "NrUiCorrection=true" in last()
+    state["request"] = state["applied_request"] = int(last().splitlines()[1])
+    state["settings"]["NrUiCorrection"] = True
+    receive(state)
     # Bridge UI combines legacy factors without changing them just by drawing.
     saved_blend = {k: state["settings"][k] for k in ("NrColorPipeline", "NrHdrTransferStrength", "NrColorStrength")}
     state["settings"].update(NrColorPipeline=1, NrHdrTransferStrength=1.75, NrColorStrength=0.06)
