@@ -54,19 +54,7 @@ BOOL CALLBACK load_chain(PINIT_ONCE, PVOID, PVOID*) noexcept {
                 }
                 // Retain loaded DLLs: third-party initialization may install hooks.
             }
-            wchar_t line[512]{};
-            swprintf_s(line, L"Cheeky: %s (Win32=%lu)\r\n", message, error);
-            OutputDebugStringW(line);
-            wcscpy_s(filename + 1, remaining, L"CheekyFoveatedDLSS-Loader.log");
-            const HANDLE log = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (log != INVALID_HANDLE_VALUE) {
-                const wchar_t bom = 0xfeff;
-                DWORD written{};
-                WriteFile(log, &bom, sizeof(bom), &written, nullptr);
-                WriteFile(log, line, static_cast<DWORD>(wcslen(line) * sizeof(wchar_t)), &written, nullptr);
-                CloseHandle(log);
-            }
+            cheeky_bootstrap_log(message, error);
         }
     }
     g_loading_chain = false;
@@ -80,12 +68,14 @@ BOOL CALLBACK load_system_dxgi(PINIT_ONCE, PVOID, PVOID*) noexcept {
     if (length == 0 || length + ARRAYSIZE(suffix) > ARRAYSIZE(path)) return FALSE;
     wcscat_s(path, suffix);
     // An absolute system path prevents recursion into the game-local proxy.
+    cheeky_bootstrap_log(L"loading System32 DXGI");
     g_dxgi = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    cheeky_bootstrap_log(g_dxgi ? L"System32 DXGI loaded" : L"System32 DXGI load FAILED", g_dxgi ? 0 : GetLastError());
     return g_dxgi != nullptr;
 }
 
 [[noreturn]] void missing_system_export() noexcept {
-    OutputDebugStringW(L"Cheeky: a required system DXGI export could not be resolved.\n");
+    cheeky_bootstrap_log(L"FATAL: required system DXGI export unresolved; raising fail-fast", GetLastError());
     // Private DXGI signatures vary, so inventing an HRESULT return here would
     // corrupt callers with another ABI. Match an unresolved import's hard failure.
     RaiseFailFastException(nullptr, nullptr, 0);
@@ -100,6 +90,11 @@ __declspec(align(8)) void* cheeky_dxgi_targets[ARRAYSIZE(exports)]{};
 
 FARPROC cheeky_dxgi_resolve(unsigned index) noexcept {
     const DWORD error = GetLastError();
+    wchar_t resolving[160]{};
+    swprintf_s(resolving, L"resolving DXGI export index=%u name=%hs", index,
+        index < ARRAYSIZE(exports) ? exports[index] : "<invalid>");
+    static volatile LONG logged[ARRAYSIZE(exports)]{};
+    if (index >= ARRAYSIZE(exports) || InterlockedCompareExchange(&logged[index], 1, 0) == 0) cheeky_bootstrap_log(resolving);
     if (index >= ARRAYSIZE(exports) ||
         !InitOnceExecuteOnce(&g_dxgi_once, load_system_dxgi, nullptr, nullptr)) missing_system_export();
     const bool reentrant = g_loading_chain;
@@ -110,7 +105,10 @@ FARPROC cheeky_dxgi_resolve(unsigned index) noexcept {
     const bool chainable = (index >= 9 && index <= 11) || index == 16 || index == 18;
     FARPROC target = !reentrant && g_chain && chainable ? GetProcAddress(g_chain, exports[index]) : nullptr;
     if (!target) target = GetProcAddress(g_dxgi, exports[index]);
-    if (target == nullptr) missing_system_export();
+    if (target == nullptr) {
+        cheeky_bootstrap_log(resolving, GetLastError());
+        missing_system_export();
+    }
     // Do not permanently bypass the chain when resolving during its initialization.
     if (!reentrant) InterlockedExchangePointer(&cheeky_dxgi_targets[index], reinterpret_cast<void*>(target));
     SetLastError(error);

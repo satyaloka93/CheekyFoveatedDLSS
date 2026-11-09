@@ -14,3 +14,6 @@ void cheeky_bootstrap_after_factory() noexcept;
 
 // 0 = idle, 1 = worker queued/starting, 2 = host started, 3 = startup failed.
 extern "C" __declspec(dllexport) unsigned CheekyBootstrap_Status() noexcept;
+
+// Append-only startup diagnostics; preserves GetLastError, no DLL loading or waits.
+void cheeky_bootstrap_log(const wchar_t* message, DWORD error = 0) noexcept;

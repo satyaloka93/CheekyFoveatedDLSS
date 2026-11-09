@@ -107,10 +107,19 @@ int wmain(int argc, wchar_t** argv) {
         if (argc == 6) fs::copy_file(argv[5], chain_path);
         if (broken_chain) std::ofstream(chain_path) << "Not a DLL";
 
+        const auto diagnostic_path = directory / L"CheekyFoveatedDLSS-Loader.log";
+        std::ofstream(diagnostic_path) << "previous-launch-marker\n";
         const auto caller = GetCurrentThreadId();
         const HMODULE loader = LoadLibraryExW(loader_path.c_str(), nullptr,
             LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
         require(loader != nullptr, "loader failed to load");
+        {
+            std::ifstream log(diagnostic_path);
+            const std::string contents((std::istreambuf_iterator<char>(log)), {});
+            require(contents.find("previous-launch-marker") != std::string::npos, "early log must append");
+            require(contents.find("PROCESS_ATTACH bootstrap-log-v1") != std::string::npos,
+                "attach must be logged before any forwarded export is called");
+        }
         const auto status = reinterpret_cast<StatusFn>(GetProcAddress(loader, "CheekyBootstrap_Status"));
         require(status != nullptr, "bootstrap status export missing");
         if (asi) {

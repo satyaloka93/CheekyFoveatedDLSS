@@ -19,7 +19,9 @@ BOOL CALLBACK load_system_version(PINIT_ONCE, PVOID, PVOID*) noexcept {
     constexpr wchar_t suffix[] = L"\\version.dll";
     if (!length || length + ARRAYSIZE(suffix) > ARRAYSIZE(path)) return FALSE;
     wcscat_s(path, suffix);
+    cheeky_bootstrap_log(L"loading System32 VERSION");
     system_version = LoadLibraryExW(path, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    cheeky_bootstrap_log(system_version ? L"System32 VERSION loaded" : L"System32 VERSION load FAILED", system_version ? 0 : GetLastError());
     return system_version != nullptr;
 }
 }
@@ -33,7 +35,9 @@ FARPROC cheeky_version_resolve(unsigned index) noexcept {
     if (index < ARRAYSIZE(exports) && InitOnceExecuteOnce(&once, load_system_version, nullptr, nullptr))
         target = GetProcAddress(system_version, exports[index]);
     if (!target) {
-        OutputDebugStringW(L"Cheeky: a required System32 VERSION export could not be resolved.\n");
+        wchar_t message[160]{};
+        swprintf_s(message, L"FATAL: VERSION export unresolved index=%u name=%hs", index, index < ARRAYSIZE(exports) ? exports[index] : "<invalid>");
+        cheeky_bootstrap_log(message, GetLastError());
         RaiseFailFastException(nullptr, nullptr, 0);
         TerminateProcess(GetCurrentProcess(), ERROR_PROC_NOT_FOUND);
         __assume(0);
